@@ -1,0 +1,6 @@
+[submodule "stm32_drv"]
+	path = stm32_drv
+	url = https://github.com/nikodemkastelik/stm32_drv.git
+[submodule "mculib"]
+	path = mculib
+	url = https://github.com/nikodemkastelik/mculib.git
