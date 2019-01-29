@@ -176,17 +176,14 @@ void speed_sense1_handler(void)
 
 void wallclock_handler(void)
 {
-    static int32_t steering_signal;
-
     int16_t enc_latest_read = (int16_t)hal_tim_count_get(ENC1_TIMER);
     hal_tim_count_clear(ENC1_TIMER);
-    int32_t actual_pos = absolute_pos + enc_latest_read;
+
+    absolute_pos += enc_latest_read;
 
     int16_t speed_imp_per_sec = enc_latest_read * (WALLCLOCK_TIMER_FREQ / WALLCLOCK_TIMER_TICKS);
 
-    steering_signal += pid_proc(&pid1, speed_imp_per_sec);
-
-    (void)pid_limit(&steering_signal, 5000, 0);
+    int32_t steering_signal = pid_positional_proc(&pid1, speed_imp_per_sec);
 
     int32_t pwm_signal = steering_signal;
     if (pwm_signal < 0)
@@ -200,11 +197,8 @@ void wallclock_handler(void)
         hal_gpio_out_clr(MOTOR_DIR_PINS_PORT, MOTOR_DIR_CW_PIN);
         hal_gpio_out_set(MOTOR_DIR_PINS_PORT, MOTOR_DIR_CCW_PIN);
     }
-    uint32_t scaled_pwm_signal = pid_scale((uint32_t)pwm_signal,
-                                           0, 5000,
-                                           500, PWM_TICKS);
 
-    hal_tim_cc_set(PWM_TIMER, HAL_TIM_CH1, scaled_pwm_signal);
+    hal_tim_cc_set(PWM_TIMER, HAL_TIM_CH1, pwm_signal);
 
     if (hal_gpio_input_check(BUTTON_PORT, BUTTON_PIN))
     {
@@ -212,11 +206,9 @@ void wallclock_handler(void)
     }
 
     log_msg("Speed: %hd\n"
-            "Signal: %d\n"
-            "Scaled: %u\n\n",
+            "Signal: %d\n\n",
             speed_imp_per_sec,
-            steering_signal,
-            scaled_pwm_signal);
+            pwm_signal);
 
     hal_tim_evt_clear(WALLCLOCK_TIMER, HAL_TIM_EVT_UPDATE);
 }
@@ -267,10 +259,12 @@ int main(void)
 
     const pid_cfg_t pidcfg =
     {
-        .kp_q = 6,
-        .ki_q = 0,
-        .kd_q = 30,
+        .kp_q = 30,
+        .ki_q = 6,
+        .kd_q = 0,
         .q    = 8,
+        .output_min = PWM_TICKS / 2,
+        .output_max = PWM_TICKS,
     };
     pid_init(&pid1, &pidcfg);
     pid_point_set(&pid1, ENC_TICKS_PER_REV / 2);
