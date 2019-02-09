@@ -6,10 +6,11 @@
 
 #include <drv_usart.h>
 
-#include <pid.h>
 #include <mini_printf.h>
+#include <mini_string.h>
+#include <strx_mngr.h>
 #include <logger.h>
-#include <moving_average.h>
+#include <pid.h>
 
 #define LED_ORANGE_PIN  13
 #define LED_GREEN_PIN   12
@@ -46,7 +47,6 @@
 #define ENC1_AF_NUM     HAL_GPIO_AF_2
 #define enc1_handler    TIM4_Handler
 
-#define ENC_TICKS_FOR_SPEED_UPDATE  12
 #define ENC_TICKS_PER_REV       4480
 #define ENC_TICKS_PER_DEGREE    (ENC_TICKS_PER_REV / 360)
 #define ENC_TICKS_TO_DEGREE(x)  ((x) / ENC_TICKS_PER_DEGREE)
@@ -71,15 +71,6 @@
 #define WALLCLOCK_TIMER_TICKS  3125
 #define wallclock_handler      TIM7_Handler
 
-/*
-#define SENSORLOOP_TIMER       TIM6
-#define SENSORLOOP_TIMER_RCC   HAL_RCC_TIM6
-#define SENSORLOOP_TIMER_IRQn  TIM6_DAC_IRQn
-#define SENSORLOOP_TIMER_FREQ  HAL_TIM_FREQ_10kHz
-#define SENSORLOOP_TIMER_TICKS 5
-#define sensorloop_handler     TIM6_DAC_Handler
-*/
-
 #define BUTTON_PORT  GPIOA
 #define BUTTON_PIN   0
 
@@ -88,91 +79,23 @@
 #define MOTOR_DIR_CW_PIN     14
 #define MOTOR_DIR_CCW_PIN    15
 
+#define STR_TO_PROCESS_SIZE  64
+#define STRX_MNGR_BUFSIZE  128
+
 pid_t pid1;
 
+char strx_mngr_buffer[STRX_MNGR_BUFSIZE];
+strx_mngr_t strx_mngr;
+
 drv_usart_t usart2  = DRV_USART_INSTANCE_GET(2);
-uint8_t recv_buf[2];
-uint8_t send_buf[1];
+uint8_t recv_byte;
 
-//uint16_t enc1_imp_time[8];
-//moving_avg_t movavg;
-
-//volatile int16_t current_speed;
 volatile int32_t absolute_pos;
 
 void log_out_handler(char * buf, uint32_t len)
 {
     drv_usart_tx(&usart2, (uint8_t *)buf, len);
 }
-
-/*
-void sensorloop_handler(void)
-{
-    current_speed = 0;
-    hal_tim_evt_clear(SENSORLOOP_TIMER, HAL_TIM_EVT_UPDATE);
-    //static uint16_t prev_diff;
-
-    uint16_t icp1;
-    uint16_t icp2;
-
-    if (hal_tim_evt_check(SPEED_SENSE1_TIMER, HAL_TIM_EVT_CC_CH1)
-        && hal_tim_evt_check(SPEED_SENSE1_TIMER, HAL_TIM_EVT_CC_CH2))
-    {
-        icp1 = hal_tim_cc_get(SPEED_SENSE1_TIMER, HAL_TIM_CH1);
-        icp2 = hal_tim_cc_get(SPEED_SENSE1_TIMER, HAL_TIM_CH2);
-
-//        log_msg("Got ICP1: %u ICP2: %u\n\n", icp1, icp2);
-    }
-    else
-    {
-        icp1 = 0;
-        icp2 = 0;
-    }
-
-    uint16_t diff = icp1 - icp2;
-    if (diff > (UINT16_MAX / 2))
-    {
-        diff = icp2 - icp1;
-    }
-    
-    moving_avg_add(&movavg, diff);
-    hal_tim_evt_clear(SENSORLOOP_TIMER, HAL_TIM_EVT_UPDATE);
-}
-*/
-
-/*
-void enc1_handler(void)
-{
-    uint32_t sensortimer_ticks = hal_tim_count_get(SPEED_SENSE1_TIMER);
-    hal_tim_count_clear(SPEED_SENSE1_TIMER);
-    hal_tim_count_clear(ENC1_TIMER);
-
-    int16_t speed = (int16_t)((SPEED_SENSE_FREQ * ENC_TICKS_FOR_SPEED_UPDATE) / sensortimer_ticks);
-    int32_t pos_inc = ENC_TICKS_FOR_SPEED_UPDATE;
-
-    uint32_t evtmask = hal_tim_evt_mask_get(ENC1_TIMER);
-    if (evtmask & HAL_TIM_EVT_CC_CH4)
-    {
-        speed *= -1;
-        pos_inc *= -1;
-    }
-
-    absolute_pos += pos_inc;
-    current_speed = speed;
-    hal_tim_evt_clear(ENC1_TIMER, evtmask);
-
-    //log_msg("Enc interrupt. Ticks: %hu\n, Speed: %hd\n\n", sensortimer_ticks, speed);
-}
-*/
-
-/*
-void speed_sense1_handler(void)
-{
-    //If this timer overflowed it means motor does not rotate
-    current_speed= 0;
-    hal_tim_evt_clear(SPEED_SENSE1_TIMER, HAL_TIM_EVT_UPDATE);
-}
-*/
 
 void wallclock_handler(void)
 {
@@ -205,10 +128,15 @@ void wallclock_handler(void)
         hal_gpio_out_toggle(LED_PIN_PORT, LED_ORANGE_PIN);
     }
 
+    log_msg("Speed: %hd\n", speed_imp_per_sec);
+    /*
     log_msg("Speed: %hd\n"
-            "Signal: %d\n\n",
+            "Signal: %d\n"
+            "Integral: %d\n\n",
             speed_imp_per_sec,
-            pwm_signal);
+            pwm_signal,
+            pid1.integral_sum);
+    */
 
     hal_tim_evt_clear(WALLCLOCK_TIMER, HAL_TIM_EVT_UPDATE);
 }
@@ -221,19 +149,14 @@ void vcp_usart_handler(drv_usart_evt_t evt, uint8_t const * buf)
         case DRV_USART_EVT_RXDONE:
             hal_gpio_out_toggle(LED_PIN_PORT, LED_GREEN_PIN);
 
-            uint8_t * next_buf;
+            uint8_t chr = buf[0];
 
-            if ((uintptr_t)buf == (uintptr_t)&recv_buf[0])
-            {
-                next_buf = &recv_buf[1];
-            }
-            else
-            {
-                next_buf = &recv_buf[0];
-            }
-            drv_usart_rx(&usart2, next_buf, 1);
+            drv_usart_rx(&usart2, &recv_byte, 1);
 
-            log_msg("Usart got byte: %c\n", buf[0]);
+            strx_mngr_feed(&strx_mngr, chr);
+
+            //log_msg("Usart got byte: 0x%x : %c\n", chr, chr);
+
             break;
 
         default:
@@ -247,13 +170,10 @@ int main(void)
     hal_rcc_enable(LED_PIN_RCC);
     hal_rcc_enable(PWM_PINS_RCC);
     hal_rcc_enable(ENC1_PINS_RCC);
-//    hal_rcc_enable(SPEED_SENSE1_PINS_RCC);
 
     hal_rcc_enable(PWM_TIMER_RCC);
     hal_rcc_enable(ENC1_TIMER_RCC);
-//    hal_rcc_enable(SPEED_SENSE1_TIMER_RCC);
     hal_rcc_enable(WALLCLOCK_TIMER_RCC);
-//    hal_rcc_enable(SENSORLOOP_TIMER_RCC);
 
     log_init(log_out_handler);
 
@@ -267,9 +187,8 @@ int main(void)
         .output_max = PWM_TICKS,
     };
     pid_init(&pid1, &pidcfg);
-    pid_point_set(&pid1, ENC_TICKS_PER_REV / 2);
 
-    //moving_avg_init(&movavg, enc1_imp_time, ARRAY_SIZE(enc1_imp_time));
+    strx_mngr_init(&strx_mngr, strx_mngr_buffer, STRX_MNGR_BUFSIZE);
 
     hal_gpio_mode_cfg(BUTTON_PORT, BUTTON_PIN, HAL_GPIO_MODE_INPUT);
 
@@ -292,35 +211,13 @@ int main(void)
     hal_gpio_af_cfg(ENC1_PINS_PORT, ENC1_CH_A_PIN, ENC1_AF_NUM);
     hal_gpio_af_cfg(ENC1_PINS_PORT, ENC1_CH_B_PIN, ENC1_AF_NUM);
 
-    /*
-    hal_gpio_mode_cfg(SPEED_SENSE1_PINS_PORT, SPEED_SENSE1_CH1_PIN, HAL_GPIO_MODE_AF);
-    hal_gpio_mode_cfg(SPEED_SENSE1_PINS_PORT, SPEED_SENSE1_CH2_PIN, HAL_GPIO_MODE_AF);
-    hal_gpio_af_cfg(SPEED_SENSE1_PINS_PORT, SPEED_SENSE1_CH1_PIN, SPEED_SENSE1_AF_NUM);
-    hal_gpio_af_cfg(SPEED_SENSE1_PINS_PORT, SPEED_SENSE1_CH2_PIN, SPEED_SENSE1_AF_NUM);
-    */
-
     hal_tim_timer_cfg(PWM_TIMER, HAL_TIM_FREQ_16MHz, PWM_TICKS);
     hal_tim_pwm_cfg(PWM_TIMER, HAL_TIM_CH1, HAL_TIM_PWM_POL_H1L0);
     hal_tim_start(PWM_TIMER);
 
-//    NVIC_EnableIRQ(ENC1_TIMER_IRQn);
     hal_tim_counter_cfg(ENC1_TIMER, HAL_TIM_PRESCALER_DISABLED, HAL_TIM_CAPACITY_MAXIMUM);
     hal_tim_encoder_cfg(ENC1_TIMER, HAL_TIM_ENC_MODE3, HAL_TIM_ENC_POL_H1L0);
-/*
-    hal_tim_cc_set(ENC1_TIMER, HAL_TIM_CH3, (uint16_t)ENC_TICKS_FOR_SPEED_UPDATE);
-    hal_tim_cc_set(ENC1_TIMER, HAL_TIM_CH4, (uint16_t)(-ENC_TICKS_FOR_SPEED_UPDATE));
-    hal_tim_int_enable(ENC1_TIMER, HAL_TIM_INT_CC_CH3 | HAL_TIM_INT_CC_CH4);
-*/
     hal_tim_start(ENC1_TIMER);
-
-/*
-    NVIC_EnableIRQ(SPEED_SENSE1_TIMER_IRQn);
-    hal_tim_timer_cfg(SPEED_SENSE1_TIMER, SPEED_SENSE_FREQ, HAL_TIM_CAPACITY_MAXIMUM);
-    hal_tim_int_enable(SPEED_SENSE1_TIMER, HAL_TIM_INT_UPDATE);
-    //hal_tim_icp_cfg(SPEED_SENSE1_TIMER, HAL_TIM_CH1, HAL_TIM_ICP_POL_H1L0);
-    //hal_tim_icp_cfg(SPEED_SENSE1_TIMER, HAL_TIM_CH2, HAL_TIM_ICP_POL_H0L1);
-    hal_tim_start(SPEED_SENSE1_TIMER);
-*/
 
     NVIC_EnableIRQ(WALLCLOCK_TIMER_IRQn);
     hal_tim_timer_cfg(WALLCLOCK_TIMER, WALLCLOCK_TIMER_FREQ, WALLCLOCK_TIMER_TICKS);
@@ -330,23 +227,56 @@ int main(void)
     NVIC_EnableIRQ(VCP_USART_IRQn);
     drv_usart_cfg_t cfg = DRV_USART_DEFAULT_CONFIG;
     drv_usart_init(&usart2, &cfg, vcp_usart_handler);
-    drv_usart_rx(&usart2, &recv_buf[0], 1);
-    drv_usart_rx(&usart2, &recv_buf[1], 1);
-
-    /*
-    NVIC_EnableIRQ(SENSORLOOP_TIMER_IRQn);
-    hal_tim_timer_cfg(SENSORLOOP_TIMER, SENSORLOOP_TIMER_FREQ, SENSORLOOP_TIMER_TICKS);
-    hal_tim_int_enable(SENSORLOOP_TIMER, HAL_TIM_INT_UPDATE);
-    hal_tim_start(SENSORLOOP_TIMER);
-    */
+    drv_usart_rx(&usart2, &recv_byte, 1);
 
     __enable_irq();
 
+    char string_to_process[STR_TO_PROCESS_SIZE];
     while (1)
     {
         if (!drv_usart_tx_ongoing_check(&usart2))
         {
             log_process();
+        }
+
+        if (strx_mngr_retrieve(&strx_mngr, string_to_process))
+        {
+            if (mini_strstartswith(string_to_process, "setpoint="))
+            {
+                const uint32_t idx = ARRAY_SIZE("setpoint=") - 1;
+                int32_t new_point = mini_atoi(&string_to_process[idx]);
+
+                log_msg("New point: %d\n", new_point);
+
+                pid_point_set(&pid1, new_point);
+            }
+            else if (mini_strstartswith(string_to_process, "pidkp="))
+            {
+                const uint32_t idx = ARRAY_SIZE("pidkp=") - 1;
+                int32_t new_kp = mini_atoi(&string_to_process[idx]);
+
+                log_msg("New Kp: %d\n", new_kp);
+
+                pid1.kp_q = new_kp;
+            }
+            else if (mini_strstartswith(string_to_process, "pidki="))
+            {
+                const uint32_t idx = ARRAY_SIZE("pidki=") - 1;
+                int32_t new_ki = mini_atoi(&string_to_process[idx]);
+
+                log_msg("New Ki: %d\n", new_ki);
+
+                pid1.ki_q = new_ki;
+            }
+            else if (mini_strstartswith(string_to_process, "pidkd="))
+            {
+                const uint32_t idx = ARRAY_SIZE("pidkd=") - 1;
+                int32_t new_kd = mini_atoi(&string_to_process[idx]);
+
+                log_msg("New Kd: %d\n", new_kd);
+
+                pid1.kd_q = new_kd;
+            }
         }
     }
 
