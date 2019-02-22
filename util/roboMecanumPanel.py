@@ -109,20 +109,41 @@ class Model:
             pass
         self._uart_mngr.stop()
 
-class FrameGraph:
+class MotorsFrameGraph:
     def __init__(self, parent_frame):
-        self.DATA_SIZE = 100
+        self.DATA_SIZE = 150
         self.INTERVAL_MS = 25
-        self._current_speed = 0
+        self._current_speed = [0, 0, 0 ,0]
 
         dpi = 70
         self.fig = plt.figure(figsize=(parent_frame['width'] / float(dpi), parent_frame['height'] / float(dpi)), dpi = dpi)
-        self.ax1 = self.fig.add_subplot(1, 1, 1)
-        self.ax1.set_ylim(-8000, 8000)
-        self.ax1.set_xlim(0, self.DATA_SIZE * (self.INTERVAL_MS / 1000))
-        self.line, = self.ax1.plot([],[], '.r-')
-        self.plotdata = np.zeros([self.DATA_SIZE, 2])
-        self.plotdata[:, 0] = np.linspace(-(self.DATA_SIZE) * self.INTERVAL_MS / 1000, 0, self.DATA_SIZE)
+        self.fig.subplots_adjust(left   = 0.05,
+                                 bottom = 0.05,
+                                 right  = 0.95,
+                                 top    = 0.95,
+                                 wspace = 0.12,
+                                 hspace = 0.1)
+
+        ax_fl = self.fig.add_subplot(2, 2, 1)
+        ax_fr = self.fig.add_subplot(2, 2, 2)
+        ax_rl = self.fig.add_subplot(2, 2, 3)
+        ax_rr = self.fig.add_subplot(2, 2, 4)
+        self.ax = [ax_fr, ax_fl, ax_rr, ax_rl]
+
+        for axis in self.ax:
+            axis.set_ylim(-8000, 8000)
+            axis.set_xlim(0, self.DATA_SIZE * (self.INTERVAL_MS / 1000))
+
+        self.lines = []
+        for axis in self.ax:
+            line, = axis.plot([],[], '.r-')
+            self.lines.append(line)
+
+        self.plotdatas = []
+        for axis in self.ax:
+            plotdata = np.zeros([self.DATA_SIZE, 2])
+            plotdata[:, 0] = np.linspace(-(self.DATA_SIZE) * self.INTERVAL_MS / 1000, 0, self.DATA_SIZE)
+            self.plotdatas.append(plotdata)
 
         plotcanvas = FigureCanvasTkAgg(self.fig, parent_frame)
         plotcanvas.get_tk_widget().pack()
@@ -131,17 +152,19 @@ class FrameGraph:
     def _updatePlot(self, i):
         t = (i * self.INTERVAL_MS) / 1000
 
-        self.plotdata = np.append(self.plotdata, [[t, self._current_speed]], axis = 0)
-        self.plotdata = np.delete(self.plotdata, (0), axis = 0)
+        for idx, speed in enumerate(self._current_speed):
+            self.plotdatas[idx] = np.append(self.plotdatas[idx], [[t, speed]], axis = 0)
+            self.plotdatas[idx] = np.delete(self.plotdatas[idx], (0), axis = 0)
 
-        self.line.set_xdata(self.plotdata[:,0])
-        self.line.set_ydata(self.plotdata[:,1])
-        self.ax1.set_xlim(self.plotdata[0, 0], self.plotdata[self.DATA_SIZE - 1, 0])
+        for axis, line, plotdata in zip(self.ax, self.lines, self.plotdatas):
+            line.set_xdata(plotdata[:,0])
+            line.set_ydata(plotdata[:,1])
+            axis.set_xlim(plotdata[0, 0], plotdata[self.DATA_SIZE - 1, 0])
 
-        return self.line,
+        return self.lines
 
-    def setSpeed(self, speed):
-        self._current_speed = speed;
+    def setSpeed(self, motor_idx, speed):
+        self._current_speed[motor_idx] = speed
 
 class View:
     def __init__(self, controller):
@@ -162,32 +185,24 @@ class View:
         frame_motor_control = Tk.Frame(frame_motor, borderwidth = 3, relief = 'groove')
         frame_motor_graphs = Tk.Frame(frame_motor, borderwidth = 3, relief = 'groove')
 
-        frame_graph_width = 500;
-        frame_graph_height = 180;
-        frame_graph_fr = Tk.Frame(frame_motor_graphs, width = frame_graph_width, height = frame_graph_height, borderwidth = 3, relief = 'groove')
-        frame_graph_fl = Tk.Frame(frame_motor_graphs, width = frame_graph_width, height = frame_graph_height, borderwidth = 3, relief = 'groove')
-        frame_graph_rr = Tk.Frame(frame_motor_graphs, width = frame_graph_width, height = frame_graph_height, borderwidth = 3, relief = 'groove')
-        frame_graph_rl = Tk.Frame(frame_motor_graphs, width = frame_graph_width, height = frame_graph_height, borderwidth = 3, relief = 'groove')
+        frame_graph_width = 1100;
+        frame_graph_height = 350;
+        frame_graph = Tk.Frame(frame_motor_graphs, width = frame_graph_width, height = frame_graph_height, borderwidth = 3, relief = 'groove')
 
         frame_title.pack(fill = Tk.X, side = Tk.TOP)
         frame_motor.pack(fill = Tk.BOTH, side = Tk.TOP, expand = True)
         frame_motor_control.pack(fill = Tk.X, side = Tk.TOP, expand = False, padx = 5, pady = 5)
         frame_motor_graphs.pack(fill = Tk.BOTH, side = Tk.TOP, expand = True, padx = 5, pady = 5)
 
-        frame_graph_fr.grid(row = 0, column = 1)
-        frame_graph_fl.grid(row = 0, column = 0)
-        frame_graph_rr.grid(row = 1, column = 1)
-        frame_graph_rl.grid(row = 1, column = 0)
+        frame_graph.grid(row = 0, column = 0)
         frame_motor_graphs.columnconfigure(index = 0, weight = 1)
-        frame_motor_graphs.columnconfigure(index = 1, weight = 1)
         frame_motor_graphs.rowconfigure(index = 0, weight = 1)
-        frame_motor_graphs.rowconfigure(index = 1, weight = 1)
 
         column_labels = ["Kp", "Ki", "Kd", "Velocity"]
         row_labels = ["FR", "FL", "RR", "RL"]
 
         self.pid_entries = []
-
+        self.velocity_entries = []
         for col_idx in range(len(column_labels)):
             pid_label = Tk.Label(frame_motor_control, text = column_labels[col_idx], font = self.title_font)
             pid_label.grid(row = 0, column = 2 * col_idx + 1, columnspan = 2, sticky = 'nsew', padx = 3, pady = 3)
@@ -196,6 +211,7 @@ class View:
             motor_label = Tk.Label(frame_motor_control, text = row_labels[row_idx - 1], font = self.title_font)
             motor_label.grid(row = row_idx, column = 0, sticky = 'nsew');
 
+            pid_entries = []
             for col_idx in range(len(column_labels)):
                 entry = Tk.Entry(frame_motor_control, justify = Tk.CENTER, font = self.title_font)
                 button_left = Tk.Button(frame_motor_control, text = "<", font = self.title_font, borderwidth = 3, relief = 'raised')
@@ -212,7 +228,12 @@ class View:
                 #button_right.grid(row = 2, column = 2 * col_idx + 1, sticky = 'nsew', padx = 20, pady = 3)
 
                 entry.insert(0, "0")
-                self.pid_entries.append(entry)
+
+                if col_idx == len(column_labels) - 1:
+                    self.velocity_entries.append(entry)
+                else:
+                    pid_entries.append(entry)
+            self.pid_entries.append(pid_entries)
 
         button = Tk.Button(frame_motor_control, text = "GO!", font = self.title_font, borderwidth = 3, relief = 'raised')
         button.bind('<Button-1>', lambda event, idx = col_idx: self._buttonClickedHandler(event, "go"))
@@ -228,10 +249,7 @@ class View:
         title_label = Tk.Label(frame_title, text = "RoboMecanum Control Panel", font = self.title_font)
         title_label.pack(fill = Tk.BOTH, side = Tk.TOP, expand = True)
 
-        self.motor_fr_graph = FrameGraph(frame_graph_fr)
-        self.motor_fl_graph = FrameGraph(frame_graph_fl)
-        self.motor_rr_graph = FrameGraph(frame_graph_rr)
-        self.motor_rl_graph = FrameGraph(frame_graph_rl)
+        self.motors_graph = MotorsFrameGraph(frame_graph)
 
     def _windowExitHandler(self):
         self._controller.windowExitHandler()
@@ -269,15 +287,15 @@ class View:
         self._is_button_pressed = False
 
     def getPidParameterEntry(self, entry_idx):
-        return int(self.pid_entries[entry_idx].get())
+        return int(self.pid_entries[0][entry_idx].get())
 
     def setPidParameterEntry(self, entry_idx, value):
-        self.pid_entries[entry_idx].delete(0, 'end')
-        self.pid_entries[entry_idx].insert(0, value)
+        self.pid_entries[0][entry_idx].delete(0, 'end')
+        self.pid_entries[0][entry_idx].insert(0, value)
 
     def getPidParameters(self):
         pid_params = []
-        for entry in self.pid_entries:
+        for entry in self.pid_entries[0]:
             pid_params.append(int(entry.get()))
         return pid_params
 
@@ -291,19 +309,19 @@ class View:
         return self.getPidParameterEntry(2)
 
     def getVelocity(self):
-        return int(self.velocity_entry.get())
+        return int(self.velocity_entries[0].get())
 
     def updateFrontRightMotorSpeed(self, value):
-        self.motor_fr_graph.setSpeed(value)
+        self.motors_graph.setSpeed(0, value)
 
     def updateFrontLeftMotorSpeed(self, value):
-        self.motor_fl_graph.setSpeed(value)
+        self.motors_graph.setSpeed(1, value)
 
     def updateRearRightMotorSpeed(self, value):
-        self.motor_rr_graph.setSpeed(value)
+        self.motors_graph.setSpeed(2, value)
 
     def updateRearLeftMotorSpeed(self, value):
-        self.motor_rl_graph.setSpeed(value)
+        self.motors_graph.setSpeed(3, value)
 
     def stop(self):
         plt.close("all")
