@@ -40,7 +40,7 @@ class SerialDevice:
         return self.dev.readline()
 
 class SerialDeviceManager(SerialDevice):
-    def __init__(self, port, baudrate = 115200, read_timeout = 0.05):
+    def __init__(self, port, baudrate = 115200, read_timeout = 0.001):
         super().__init__(port, baudrate, read_timeout)
         self._read_queue = queue.Queue()
         self._write_queue = queue.Queue()
@@ -109,84 +109,14 @@ class Model:
             pass
         self._uart_mngr.stop()
 
-
-class View:
-    def __init__(self, controller):
+class FrameGraph:
+    def __init__(self, parent_frame):
         self.DATA_SIZE = 100
         self.INTERVAL_MS = 25
-        self._controller = controller
-        self._is_button_pressed = False
         self._current_speed = 0
 
-        self.root = Tk.Tk()
-        self.root.title("RoboMecanum Control Panel")
-        self.root.geometry("700x650")
-        self.root.wm_minsize(width = 700, height = 650)
-        self.root.protocol('WM_DELETE_WINDOW', self._windowExitHandler)
-
-        self.small_font = Tk.font.Font(family = 'Consolas', size = 10)
-        self.title_font = Tk.font.Font(family = 'Consolas', size = 18, weight = 'bold')
-
-        frame_title = Tk.Frame(self.root, height = 50, borderwidth = 3, relief = 'raised')
-        frame_motor = Tk.Frame(self.root, borderwidth = 3, relief = 'sunken')
-        frame_motor_control = Tk.Frame(frame_motor, borderwidth = 3, relief = 'groove')
-        frame_motor_graph = Tk.Frame(frame_motor, borderwidth = 3, relief = 'groove')
-        frame_graph = Tk.Frame(frame_motor_graph, width = 600, height = 300, borderwidth = 3, relief = 'groove')
-
-        frame_title.pack(fill = Tk.X, side = Tk.TOP)
-        frame_motor.pack(fill = Tk.BOTH, side = Tk.TOP, expand = True)
-        frame_motor_control.pack(fill = Tk.X, side = Tk.TOP, expand = False, padx = 5, pady = 5)
-        frame_motor_graph.pack(fill = Tk.BOTH, side = Tk.TOP, expand = True, padx = 5, pady = 5)
-        frame_graph.grid(row = 0, column = 0)
-        frame_motor_graph.columnconfigure(index = 0, weight = 1)
-        frame_motor_graph.rowconfigure(index = 0, weight = 1)
-
-        column_labels = ["Kp", "Ki", "Kd"]
-        self.pid_entries = []
-        for col_idx in range(len(column_labels)):
-            label = Tk.Label(frame_motor_control, text = column_labels[col_idx], font = self.title_font)
-            entry = Tk.Entry(frame_motor_control, justify = Tk.CENTER, font = self.title_font)
-            button_left = Tk.Button(frame_motor_control, text = "<", font = self.title_font, borderwidth = 3, relief = 'raised')
-            button_right = Tk.Button(frame_motor_control, text = ">", font = self.title_font, borderwidth = 3, relief = 'raised')
-
-            button_left.bind('<Button-1>', lambda event, idx = col_idx: self._buttonClickedHandler(event, "decrement {}".format(idx)))
-            button_right.bind('<Button-1>', lambda event, idx = col_idx: self._buttonClickedHandler(event, "increment {}".format(idx)))
-
-            button_left.bind('<ButtonRelease-1>', lambda event, idx = col_idx: self._buttonReleasedHandler(event, "decrement {}".format(idx)))
-            button_right.bind('<ButtonRelease-1>', lambda event, idx = col_idx: self._buttonReleasedHandler(event, "increment {}".format(idx)))
-
-            label.grid(row = 0, column = 2 * col_idx, columnspan = 2, sticky = 'nsew', padx = 3, pady = 3)
-            entry.grid(row = 1, column = 2 * col_idx, columnspan = 2, sticky = 'nsew', padx = 20, pady = 3)
-            button_left.grid(row = 2, column = 2 * col_idx, sticky = 'nsew', padx = 20, pady = 3)
-            button_right.grid(row = 2, column = 2 * col_idx + 1, sticky = 'nsew', padx = 20, pady = 3)
-
-            frame_motor_control.columnconfigure(index = 2 * col_idx, weight = 1)
-            frame_motor_control.columnconfigure(index = 2 * col_idx + 1, weight = 1)
-
-            entry.insert(0, "0")
-            self.pid_entries.append(entry)
-
-        for i in range(0, 3):
-            frame_motor_control.rowconfigure(index = i, weight = 0)
-
-        empty_label = Tk.Label(frame_motor_control, text = "", font = self.title_font)
-        label = Tk.Label(frame_motor_control, text = "Velocity", font = self.title_font)
-        self.velocity_entry = Tk.Entry(frame_motor_control, justify = Tk.CENTER, font = self.title_font)
-        button = Tk.Button(frame_motor_control, text = "GO!", font = self.title_font, borderwidth = 3, relief = 'raised')
-
-        button.bind('<Button-1>', lambda event, idx = col_idx: self._buttonClickedHandler(event, "go"))
-        self.velocity_entry.insert(0, "0")
-
-        empty_label.grid(row = 4, column = 0, columnspan = 2, sticky = 'nsew', padx = 20, pady = 1)
-        label.grid(row = 5, column = 0, columnspan = 2, sticky = 'nsew', padx = 20, pady = 20)
-        self.velocity_entry.grid(row = 5, column = 2, columnspan = 2, sticky = 'nsew', padx = 20, pady = 20)
-        button.grid(row = 5, column = 4, columnspan = 2, sticky = 'nsew', padx = 20, pady = 20)
-
-        title_label = Tk.Label(frame_title, text = "RoboMecanum Control Panel", font = self.title_font)
-        title_label.pack(fill = Tk.BOTH, side = Tk.TOP, expand = True)
-
-        dpi = 100
-        self.fig = plt.figure(figsize=(frame_graph['width'] / float(dpi), frame_graph['height'] / float(dpi)), dpi = dpi)
+        dpi = 70
+        self.fig = plt.figure(figsize=(parent_frame['width'] / float(dpi), parent_frame['height'] / float(dpi)), dpi = dpi)
         self.ax1 = self.fig.add_subplot(1, 1, 1)
         self.ax1.set_ylim(-8000, 8000)
         self.ax1.set_xlim(0, self.DATA_SIZE * (self.INTERVAL_MS / 1000))
@@ -194,7 +124,7 @@ class View:
         self.plotdata = np.zeros([self.DATA_SIZE, 2])
         self.plotdata[:, 0] = np.linspace(-(self.DATA_SIZE) * self.INTERVAL_MS / 1000, 0, self.DATA_SIZE)
 
-        plotcanvas = FigureCanvasTkAgg(self.fig, frame_graph)
+        plotcanvas = FigureCanvasTkAgg(self.fig, parent_frame)
         plotcanvas.get_tk_widget().pack()
         self.anim = animation.FuncAnimation(self.fig, self._updatePlot, interval = self.INTERVAL_MS, blit = True)
 
@@ -209,6 +139,99 @@ class View:
         self.ax1.set_xlim(self.plotdata[0, 0], self.plotdata[self.DATA_SIZE - 1, 0])
 
         return self.line,
+
+    def setSpeed(self, speed):
+        self._current_speed = speed;
+
+class View:
+    def __init__(self, controller):
+        self._controller = controller
+        self._is_button_pressed = False
+
+        self.root = Tk.Tk()
+        self.root.title("RoboMecanum Control Panel")
+        self.root.attributes('-zoomed', True)
+        self.root.wm_minsize(width = 700, height = 650)
+        self.root.protocol('WM_DELETE_WINDOW', self._windowExitHandler)
+
+        self.small_font = Tk.font.Font(family = 'Consolas', size = 10)
+        self.title_font = Tk.font.Font(family = 'Consolas', size = 18, weight = 'bold')
+
+        frame_title = Tk.Frame(self.root, height = 50, borderwidth = 3, relief = 'raised')
+        frame_motor = Tk.Frame(self.root, borderwidth = 3, relief = 'sunken')
+        frame_motor_control = Tk.Frame(frame_motor, borderwidth = 3, relief = 'groove')
+        frame_motor_graphs = Tk.Frame(frame_motor, borderwidth = 3, relief = 'groove')
+
+        frame_graph_width = 500;
+        frame_graph_height = 180;
+        frame_graph_fr = Tk.Frame(frame_motor_graphs, width = frame_graph_width, height = frame_graph_height, borderwidth = 3, relief = 'groove')
+        frame_graph_fl = Tk.Frame(frame_motor_graphs, width = frame_graph_width, height = frame_graph_height, borderwidth = 3, relief = 'groove')
+        frame_graph_rr = Tk.Frame(frame_motor_graphs, width = frame_graph_width, height = frame_graph_height, borderwidth = 3, relief = 'groove')
+        frame_graph_rl = Tk.Frame(frame_motor_graphs, width = frame_graph_width, height = frame_graph_height, borderwidth = 3, relief = 'groove')
+
+        frame_title.pack(fill = Tk.X, side = Tk.TOP)
+        frame_motor.pack(fill = Tk.BOTH, side = Tk.TOP, expand = True)
+        frame_motor_control.pack(fill = Tk.X, side = Tk.TOP, expand = False, padx = 5, pady = 5)
+        frame_motor_graphs.pack(fill = Tk.BOTH, side = Tk.TOP, expand = True, padx = 5, pady = 5)
+
+        frame_graph_fr.grid(row = 0, column = 1)
+        frame_graph_fl.grid(row = 0, column = 0)
+        frame_graph_rr.grid(row = 1, column = 1)
+        frame_graph_rl.grid(row = 1, column = 0)
+        frame_motor_graphs.columnconfigure(index = 0, weight = 1)
+        frame_motor_graphs.columnconfigure(index = 1, weight = 1)
+        frame_motor_graphs.rowconfigure(index = 0, weight = 1)
+        frame_motor_graphs.rowconfigure(index = 1, weight = 1)
+
+        column_labels = ["Kp", "Ki", "Kd", "Velocity"]
+        row_labels = ["FR", "FL", "RR", "RL"]
+
+        self.pid_entries = []
+
+        for col_idx in range(len(column_labels)):
+            pid_label = Tk.Label(frame_motor_control, text = column_labels[col_idx], font = self.title_font)
+            pid_label.grid(row = 0, column = 2 * col_idx + 1, columnspan = 2, sticky = 'nsew', padx = 3, pady = 3)
+
+        for row_idx in range(1, len(row_labels) + 1):
+            motor_label = Tk.Label(frame_motor_control, text = row_labels[row_idx - 1], font = self.title_font)
+            motor_label.grid(row = row_idx, column = 0, sticky = 'nsew');
+
+            for col_idx in range(len(column_labels)):
+                entry = Tk.Entry(frame_motor_control, justify = Tk.CENTER, font = self.title_font)
+                button_left = Tk.Button(frame_motor_control, text = "<", font = self.title_font, borderwidth = 3, relief = 'raised')
+                button_right = Tk.Button(frame_motor_control, text = ">", font = self.title_font, borderwidth = 3, relief = 'raised')
+
+                button_left.bind('<Button-1>', lambda event, idx = col_idx: self._buttonClickedHandler(event, "decrement {}".format(idx)))
+                button_right.bind('<Button-1>', lambda event, idx = col_idx: self._buttonClickedHandler(event, "increment {}".format(idx)))
+
+                button_left.bind('<ButtonRelease-1>', lambda event, idx = col_idx: self._buttonReleasedHandler(event, "decrement {}".format(idx)))
+                button_right.bind('<ButtonRelease-1>', lambda event, idx = col_idx: self._buttonReleasedHandler(event, "increment {}".format(idx)))
+
+                entry.grid(row = row_idx, column = 2 * col_idx + 1, columnspan = 2, sticky = 'nsew', padx = 20, pady = 3)
+                #button_left.grid(row = 2, column = 2 * col_idx, sticky = 'nsew', padx = 20, pady = 3)
+                #button_right.grid(row = 2, column = 2 * col_idx + 1, sticky = 'nsew', padx = 20, pady = 3)
+
+                entry.insert(0, "0")
+                self.pid_entries.append(entry)
+
+        button = Tk.Button(frame_motor_control, text = "GO!", font = self.title_font, borderwidth = 3, relief = 'raised')
+        button.bind('<Button-1>', lambda event, idx = col_idx: self._buttonClickedHandler(event, "go"))
+        button.grid(row = len(row_labels) + 2, column = int(len(column_labels) / 2) + 1, columnspan = 4, sticky = 'nsew', padx = 20, pady = 5)
+
+        for i in range(len(row_labels) + 2):
+            frame_motor_control.rowconfigure(index = i, weight = 1)
+
+        frame_motor_control.columnconfigure(index = 0, weight = 1, minsize = 50)
+        for i in range(1, 2 * len(column_labels) + 1):
+            frame_motor_control.columnconfigure(index = i, weight = 1)
+
+        title_label = Tk.Label(frame_title, text = "RoboMecanum Control Panel", font = self.title_font)
+        title_label.pack(fill = Tk.BOTH, side = Tk.TOP, expand = True)
+
+        self.motor_fr_graph = FrameGraph(frame_graph_fr)
+        self.motor_fl_graph = FrameGraph(frame_graph_fl)
+        self.motor_rr_graph = FrameGraph(frame_graph_rr)
+        self.motor_rl_graph = FrameGraph(frame_graph_rl)
 
     def _windowExitHandler(self):
         self._controller.windowExitHandler()
@@ -270,8 +293,17 @@ class View:
     def getVelocity(self):
         return int(self.velocity_entry.get())
 
-    def updateCurrentSpeed(self, value):
-        self._current_speed = value
+    def updateFrontRightMotorSpeed(self, value):
+        self.motor_fr_graph.setSpeed(value)
+
+    def updateFrontLeftMotorSpeed(self, value):
+        self.motor_fl_graph.setSpeed(value)
+
+    def updateRearRightMotorSpeed(self, value):
+        self.motor_rr_graph.setSpeed(value)
+
+    def updateRearLeftMotorSpeed(self, value):
+        self.motor_rl_graph.setSpeed(value)
 
     def stop(self):
         plt.close("all")
@@ -289,7 +321,7 @@ class Controller:
     CMD_SETKI = "pidki={}\r"
     CMD_SETKD = "pidkd={}\r"
 
-    INFO_SPEED = "Speed:"
+    INFO_SPEED = "Speed"
 
     def __init__(self):
         self.PanelView = View(self)
@@ -310,8 +342,18 @@ class Controller:
 
         if line.startswith(self.INFO_SPEED):
             try:
-                current_speed_value = int(line.split(" ")[-1])
-                self.PanelView.updateCurrentSpeed(current_speed_value)
+                speed_value = int(line.split(" ")[-1])
+                motor_desc = line.split(" ")[-2]
+
+                if motor_desc.startswith("FR"):
+                    self.PanelView.updateFrontRightMotorSpeed(speed_value)
+                elif motor_desc.startswith("FL"):
+                    self.PanelView.updateFrontLeftMotorSpeed(speed_value)
+                elif motor_desc.startswith("RR"):
+                    self.PanelView.updateRearRightMotorSpeed(speed_value)
+                elif motor_desc.startswith("RL"):
+                    self.PanelView.updateRearLeftMotorSpeed(speed_value)
+
             except ValueError:
                 print("Cannot convert speed to value: {}".format(line))
         else:
