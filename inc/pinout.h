@@ -44,12 +44,12 @@
 #define PWM_FRONT_TIMER_RCC  _GLUE(HAL_RCC_TIM, PWM_FRONT_TIMER_IDX)
 #define PWM_FRONT_PIN_PORT   GPIOE
 #define PWM_FRONT_PIN_AF     HAL_GPIO_AF_1
-#define PWM_FR_PIN_CH_CW     9
-#define PWM_FR_PIN_CH_CCW    11
+#define PWM_FR_PIN_CH_CW     11
+#define PWM_FR_PIN_CH_CCW    9
 #define PWM_FL_PIN_CH_CW     13
 #define PWM_FL_PIN_CH_CCW    14
-#define PWM_FR_CH_CW         HAL_TIM_CH1
-#define PWM_FR_CH_CCW        HAL_TIM_CH2
+#define PWM_FR_CH_CW         HAL_TIM_CH2
+#define PWM_FR_CH_CCW        HAL_TIM_CH1
 #define PWM_FL_CH_CW         HAL_TIM_CH3
 #define PWM_FL_CH_CCW        HAL_TIM_CH4
 
@@ -58,12 +58,12 @@
 #define PWM_REAR_TIMER_RCC   _GLUE(HAL_RCC_TIM, PWM_REAR_TIMER_IDX)
 #define PWM_REAR_PIN_PORT    GPIOC
 #define PWM_REAR_PIN_AF      HAL_GPIO_AF_3
-#define PWM_RR_PIN_CH_CW     6
-#define PWM_RR_PIN_CH_CCW    7
+#define PWM_RR_PIN_CH_CW     7
+#define PWM_RR_PIN_CH_CCW    6
 #define PWM_RL_PIN_CH_CW     8
 #define PWM_RL_PIN_CH_CCW    9
-#define PWM_RR_CH_CW         HAL_TIM_CH1
-#define PWM_RR_CH_CCW        HAL_TIM_CH2
+#define PWM_RR_CH_CW         HAL_TIM_CH2
+#define PWM_RR_CH_CCW        HAL_TIM_CH1
 #define PWM_RL_CH_CW         HAL_TIM_CH3
 #define PWM_RL_CH_CCW        HAL_TIM_CH4
 

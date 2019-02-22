@@ -75,6 +75,7 @@ typedef struct
     TIM_TypeDef * pwm_timer;
     uint8_t       pwm_ch_cw;
     uint8_t       pwm_ch_ccw;
+    bool          inverted;
 } robot_motor_cfg_t;
 
 typedef struct
@@ -92,6 +93,7 @@ const robot_motor_cfg_t robot_motor_cfgs[MOTOR_COUNT] =
         .pwm_timer  = PWM_FRONT_TIMER,
         .pwm_ch_cw  = PWM_FR_CH_CW,
         .pwm_ch_ccw = PWM_FR_CH_CCW,
+        .inverted   = true,
     },
     {
         .desc       = "FL",
@@ -99,6 +101,7 @@ const robot_motor_cfg_t robot_motor_cfgs[MOTOR_COUNT] =
         .pwm_timer  = PWM_FRONT_TIMER,
         .pwm_ch_cw  = PWM_FL_CH_CW,
         .pwm_ch_ccw = PWM_FL_CH_CCW,
+        .inverted   = false,
     },
     {
         .desc       = "RR",
@@ -106,6 +109,7 @@ const robot_motor_cfg_t robot_motor_cfgs[MOTOR_COUNT] =
         .pwm_timer  = PWM_REAR_TIMER,
         .pwm_ch_cw  = PWM_RR_CH_CW,
         .pwm_ch_ccw = PWM_RR_CH_CCW,
+        .inverted   = true,
     },
     {
         .desc       = "RL",
@@ -113,6 +117,7 @@ const robot_motor_cfg_t robot_motor_cfgs[MOTOR_COUNT] =
         .pwm_timer  = PWM_REAR_TIMER,
         .pwm_ch_cw  = PWM_RL_CH_CW,
         .pwm_ch_ccw = PWM_RL_CH_CCW,
+        .inverted   = false,
     },
 };
 
@@ -166,6 +171,11 @@ static void robot_pid_proc(robot_motor_t * p_robot_motor, int16_t enc_latest_rea
     pid_t * p_robot_pid = &(p_robot_motor->pid);
 
     int16_t speed_imp_per_sec = enc_latest_read * (WALLCLOCK_TIMER_FREQ / WALLCLOCK_TIMER_TICKS);
+
+    if (p_robot_motor->config->inverted)
+    {
+        speed_imp_per_sec =- speed_imp_per_sec;
+    }
 
     int32_t steering_signal = pid_positional_proc(p_robot_pid, speed_imp_per_sec);
 
