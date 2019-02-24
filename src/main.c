@@ -88,7 +88,7 @@ typedef struct
 const robot_motor_cfg_t robot_motor_cfgs[MOTOR_COUNT] =
 {
     {
-        .desc       = "FR",
+        .desc       = MOTOR_FR_DESC,
         .enc_timer  = ENC_FR_TIMER,
         .pwm_timer  = PWM_FRONT_TIMER,
         .pwm_ch_cw  = PWM_FR_CH_CW,
@@ -96,7 +96,7 @@ const robot_motor_cfg_t robot_motor_cfgs[MOTOR_COUNT] =
         .inverted   = true,
     },
     {
-        .desc       = "FL",
+        .desc       = MOTOR_FL_DESC,
         .enc_timer  = ENC_FL_TIMER,
         .pwm_timer  = PWM_FRONT_TIMER,
         .pwm_ch_cw  = PWM_FL_CH_CW,
@@ -104,7 +104,7 @@ const robot_motor_cfg_t robot_motor_cfgs[MOTOR_COUNT] =
         .inverted   = false,
     },
     {
-        .desc       = "RR",
+        .desc       = MOTOR_RR_DESC,
         .enc_timer  = ENC_RR_TIMER,
         .pwm_timer  = PWM_REAR_TIMER,
         .pwm_ch_cw  = PWM_RR_CH_CW,
@@ -112,7 +112,7 @@ const robot_motor_cfg_t robot_motor_cfgs[MOTOR_COUNT] =
         .inverted   = true,
     },
     {
-        .desc       = "RL",
+        .desc       = MOTOR_RL_DESC,
         .enc_timer  = ENC_RL_TIMER,
         .pwm_timer  = PWM_REAR_TIMER,
         .pwm_ch_cw  = PWM_RL_CH_CW,
@@ -143,6 +143,18 @@ void dwt_delay_us(uint32_t us)
     while (DWT->CYCCNT <= target_tick);
 }
 
+uint8_t robot_idx_from_desc_get(char * desc)
+{
+    for (uint8_t idx = 0; idx < MOTOR_COUNT; idx++)
+    {
+        if (mini_strstartswith(desc, robot_motors[idx].config->desc))
+        {
+            return idx;
+        }
+    }
+    return UINT8_MAX;
+}
+
 void robot_set_pwm(robot_motor_t * p_robot_motor)
 {
     TIM_TypeDef * pwm_timer = p_robot_motor->config->pwm_timer;
@@ -152,9 +164,11 @@ void robot_set_pwm(robot_motor_t * p_robot_motor)
 
 //    log_msg("Setting motor %s PWM value: %d\n", p_robot_motor->config->desc, pwm_signal);
 
+    /* Make sure that only one MOSFET out of two will be enabled at time */
     hal_tim_cc_set(pwm_timer, pwm_ch_cw, 0);
     hal_tim_cc_set(pwm_timer, pwm_ch_ccw, 0);
     dwt_delay_us(500);
+
     if (pwm_signal < 0)
     {
         pwm_signal = -pwm_signal;
@@ -354,52 +368,72 @@ int main(void)
 
         if (strx_mngr_retrieve(&strx_mngr, string_to_process))
         {
-            if (mini_strstartswith(string_to_process, "setpoint="))
+            if (mini_strstartswith(string_to_process, "setpoint_"))
             {
-                const uint32_t idx = ARRAY_SIZE("setpoint=") - 1;
-                int32_t new_point = mini_atoi(&string_to_process[idx]);
+                uint32_t idx = ARRAY_SIZE("setpoint_") - 1;
 
-                log_msg("New point: %d\n", new_point);
+                uint8_t motor_idx = robot_idx_from_desc_get(&string_to_process[idx]);
 
-                for (uint8_t idx = 0; idx < MOTOR_COUNT; idx++)
+                if (motor_idx != UINT8_MAX)
                 {
-                    pid_point_set(&robot_motors[idx].pid, new_point);
+                    idx += MOTOR_DESC_LEN + 1; // desc + '=' sign
+                    int32_t new_point = mini_atoi(&string_to_process[idx]);
+
+                    pid_point_set(&robot_motors[motor_idx].pid, new_point);
+
+                    log_msg("New point %s: %d\n", robot_motors[motor_idx].config->desc, new_point);
                 }
             }
-            else if (mini_strstartswith(string_to_process, "pidkp="))
+            else if (mini_strstartswith(string_to_process, "pidkp_"))
             {
-                const uint32_t idx = ARRAY_SIZE("pidkp=") - 1;
-                int32_t new_kp = mini_atoi(&string_to_process[idx]);
+                uint32_t idx = ARRAY_SIZE("pidkp_") - 1;
 
-                log_msg("New Kp: %d\n", new_kp);
+                uint8_t motor_idx = robot_idx_from_desc_get(&string_to_process[idx]);
 
-                for (uint8_t idx = 0; idx < MOTOR_COUNT; idx++)
+                if (motor_idx != UINT8_MAX)
                 {
-                    robot_motors[idx].pid.kp_q = new_kp;
+                    idx += MOTOR_DESC_LEN + 1; // desc + '=' sign
+
+                    int32_t new_kp = mini_atoi(&string_to_process[idx]);
+
+                    robot_motors[motor_idx].pid.kp_q = new_kp;
+
+                    log_msg("New Kp %s: %d\n", robot_motors[motor_idx].config->desc, new_kp);
+                }
+
+            }
+            else if (mini_strstartswith(string_to_process, "pidki_"))
+            {
+                uint32_t idx = ARRAY_SIZE("pidki_") - 1;
+
+                uint8_t motor_idx = robot_idx_from_desc_get(&string_to_process[idx]);
+
+                if (motor_idx != UINT8_MAX)
+                {
+                    idx += MOTOR_DESC_LEN + 1; // desc + '=' sign
+
+                    int32_t new_ki = mini_atoi(&string_to_process[idx]);
+
+                    robot_motors[motor_idx].pid.ki_q = new_ki;
+
+                    log_msg("New Ki %s: %d\n", robot_motors[motor_idx].config->desc, new_ki);
                 }
             }
-            else if (mini_strstartswith(string_to_process, "pidki="))
+            else if (mini_strstartswith(string_to_process, "pidkd_"))
             {
-                const uint32_t idx = ARRAY_SIZE("pidki=") - 1;
-                int32_t new_ki = mini_atoi(&string_to_process[idx]);
+                uint32_t idx = ARRAY_SIZE("pidkd_") - 1;
 
-                log_msg("New Ki: %d\n", new_ki);
+                uint8_t motor_idx = robot_idx_from_desc_get(&string_to_process[idx]);
 
-                for (uint8_t idx = 0; idx < MOTOR_COUNT; idx++)
+                if (motor_idx != UINT8_MAX)
                 {
-                    robot_motors[idx].pid.ki_q = new_ki;
-                }
-            }
-            else if (mini_strstartswith(string_to_process, "pidkd="))
-            {
-                const uint32_t idx = ARRAY_SIZE("pidkd=") - 1;
-                int32_t new_kd = mini_atoi(&string_to_process[idx]);
+                    idx += MOTOR_DESC_LEN + 1; // desc + '=' sign
 
-                log_msg("New Kd: %d\n", new_kd);
+                    int32_t new_kd = mini_atoi(&string_to_process[idx]);
 
-                for (uint8_t idx = 0; idx < MOTOR_COUNT; idx++)
-                {
-                    robot_motors[idx].pid.kd_q = new_kd;
+                    robot_motors[motor_idx].pid.kd_q = new_kd;
+
+                    log_msg("New Kd %s: %d\n", robot_motors[motor_idx].config->desc, new_kd);
                 }
             }
         }

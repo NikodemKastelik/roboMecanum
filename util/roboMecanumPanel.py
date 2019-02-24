@@ -286,30 +286,30 @@ class View:
     def _buttonReleasedHandler(self, event, metadata):
         self._is_button_pressed = False
 
-    def getPidParameterEntry(self, entry_idx):
-        return int(self.pid_entries[0][entry_idx].get())
+    def getPidParameterEntry(self, motor_idx, entry_idx):
+        return int(self.pid_entries[motor_idx][entry_idx].get())
 
-    def setPidParameterEntry(self, entry_idx, value):
-        self.pid_entries[0][entry_idx].delete(0, 'end')
-        self.pid_entries[0][entry_idx].insert(0, value)
+    def setPidParameterEntry(self, motor_idx, entry_idx, value):
+        self.pid_entries[motor_idx][entry_idx].delete(0, 'end')
+        self.pid_entries[motor_idx][entry_idx].insert(0, value)
 
-    def getPidParameters(self):
+    def getPidParameters(self, motor_idx):
         pid_params = []
-        for entry in self.pid_entries[0]:
+        for entry in self.pid_entries[motor_idx]:
             pid_params.append(int(entry.get()))
         return pid_params
 
-    def getPidKp(self):
-        return self.getPidParameterEntry(0)
+    def getPidKp(self, motor_idx):
+        return self.getPidParameterEntry(motor_idx, 0)
 
-    def getPidKi(self):
-        return self.getPidParameterEntry(1)
+    def getPidKi(self, motor_idx):
+        return self.getPidParameterEntry(motor_idx, 1)
 
-    def getPidKd(self):
-        return self.getPidParameterEntry(2)
+    def getPidKd(self, motor_idx):
+        return self.getPidParameterEntry(motor_idx, 2)
 
-    def getVelocity(self):
-        return int(self.velocity_entries[0].get())
+    def getVelocity(self, motor_idx):
+        return int(self.velocity_entries[motor_idx].get())
 
     def updateFrontRightMotorSpeed(self, value):
         self.motors_graph.setSpeed(0, value)
@@ -334,12 +334,24 @@ class View:
 
 class Controller:
 
-    CMD_SETPOINT = "setpoint={}\r"
-    CMD_SETKP = "pidkp={}\r"
-    CMD_SETKI = "pidki={}\r"
-    CMD_SETKD = "pidkd={}\r"
+    CMD_SETPOINT = "setpoint_{}={}\r"
+    CMD_SETKP = "pidkp_{}={}\r"
+    CMD_SETKI = "pidki_{}={}\r"
+    CMD_SETKD = "pidkd_{}={}\r"
 
     INFO_SPEED = "Speed"
+
+    IDX_MOTOR_FR = 0
+    IDX_MOTOR_FL = 1
+    IDX_MOTOR_RR = 2
+    IDX_MOTOR_RL = 3
+    MOTOR_INDEXES = [IDX_MOTOR_FR, IDX_MOTOR_FL, IDX_MOTOR_RR, IDX_MOTOR_RL]
+
+    DESC_MOTOR_FR = "FR"
+    DESC_MOTOR_FL = "FL"
+    DESC_MOTOR_RR = "RR"
+    DESC_MOTOR_RL = "RL"
+    MOTOR_DESC = [DESC_MOTOR_FR, DESC_MOTOR_FL, DESC_MOTOR_RR, DESC_MOTOR_RL]
 
     def __init__(self):
         self.PanelView = View(self)
@@ -378,14 +390,15 @@ class Controller:
             print("Controller got new uart line: >>{}<<".format(line))
 
     def setPidPoint(self):
-        kp = self.PanelView.getPidKp()
-        ki = self.PanelView.getPidKi()
-        kd = self.PanelView.getPidKd()
-        velocity = self.PanelView.getVelocity()
-        self.PanelModel.sendStringOverUart(self.CMD_SETKP.format(kp))
-        self.PanelModel.sendStringOverUart(self.CMD_SETKI.format(ki))
-        self.PanelModel.sendStringOverUart(self.CMD_SETKD.format(kd))
-        self.PanelModel.sendStringOverUart(self.CMD_SETPOINT.format(velocity))
+        for idx, desc in zip(self.MOTOR_INDEXES, self.MOTOR_DESC):
+            kp = self.PanelView.getPidKp(idx)
+            ki = self.PanelView.getPidKi(idx)
+            kd = self.PanelView.getPidKd(idx)
+            velocity = self.PanelView.getVelocity(idx)
+            self.PanelModel.sendStringOverUart(self.CMD_SETKP.format(desc, kp))
+            self.PanelModel.sendStringOverUart(self.CMD_SETKI.format(desc, ki))
+            self.PanelModel.sendStringOverUart(self.CMD_SETKD.format(desc, kd))
+            self.PanelModel.sendStringOverUart(self.CMD_SETPOINT.format(desc, velocity))
 
     def windowExitHandler(self):
         self.PanelView.stop()

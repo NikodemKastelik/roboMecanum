@@ -32,6 +32,12 @@
 #define WALLCLOCK_TIMER_TICKS  3125
 #define wallclock_handler      _GLUE3(TIM, WALLCLOCK_TIMER_IDX, _Handler)
 
+#define MOTOR_FR_DESC   "FR"
+#define MOTOR_FL_DESC   "FL"
+#define MOTOR_RR_DESC   "RR"
+#define MOTOR_RL_DESC   "RL"
+#define MOTOR_DESC_LEN  (ARRAY_SIZE(MOTOR_FR_DESC) - 1)
+
 /*
  * @brief Symbols for motor steering PWM.
  *
