@@ -111,8 +111,8 @@ class Model:
 
 class MotorsFrameGraph:
     def __init__(self, parent_frame):
-        self.DATA_SIZE = 150
-        self.INTERVAL_MS = 25
+        self.DATA_SIZE = 200
+        self.INTERVAL_MS = 1
         self._current_speed = [0, 0, 0 ,0]
 
         dpi = 70
@@ -166,37 +166,111 @@ class MotorsFrameGraph:
     def setSpeed(self, motor_idx, speed):
         self._current_speed[motor_idx] = speed
 
-class View:
-    def __init__(self, controller):
+
+class MotorControlPage(Tk.Frame):
+    def __init__(self, *args, **kwargs):
+        Tk.Frame.__init__(self, *args, **kwargs)
+
+    def show(self):
+        self._onShow()
+        self.tkraise()
+        self.lift()
+
+    def _onShow(self):
+        raise NotImplementedError
+
+class PageVelocityVectorControl(MotorControlPage):
+    def __init__(self, root, controller):
+        MotorControlPage.__init__(self)
+
         self._controller = controller
+        self._root = root
         self._is_button_pressed = False
 
-        self.root = Tk.Tk()
-        self.root.title("RoboMecanum Control Panel")
-        self.root.attributes('-zoomed', True)
-        self.root.wm_minsize(width = 700, height = 650)
-        self.root.protocol('WM_DELETE_WINDOW', self._windowExitHandler)
+        self._canvas = Tk.Canvas(self)
+        self._canvas.pack(fill = Tk.BOTH, side = Tk.TOP, expand = True)
 
+        root.update_idletasks()
+
+        center_x = self._canvas.winfo_width() / 2
+        center_y = self._canvas.winfo_height() / 2
+        oval_radius_px = self._canvas.winfo_height() - 10
+        self.oval = self._canvas.create_oval(center_x - oval_radius_px, center_y - oval_radius_px,
+                                             center_x + oval_radius_px, center_y + oval_radius_px,
+                                             fill = 'white')
+        self._canvas.tag_bind(self.oval, '<Button-1>', self._clickedInCircleHandler)
+        self._canvas.tag_bind(self.oval, '<ButtonRelease-1>', self._releasedCirceClickHandler)
+
+        self.velocity_vector = self._canvas.create_line(center_x, center_y,
+                                                        center_x, center_y,
+                                                        arrow = Tk.LAST,
+                                                        width = 4)
+
+    def redraw(self):
+        self._root.update_idletasks()
+        center_x = self._canvas.winfo_width() / 2
+        center_y = self._canvas.winfo_height() / 2
+        oval_radius_px = (self._canvas.winfo_height() / 2) - 10
+        self._canvas.coords(self.oval, (center_x - oval_radius_px, center_y - oval_radius_px,
+                                        center_x + oval_radius_px, center_y + oval_radius_px))
+        self._canvas.coords(self.velocity_vector, (center_x, center_y,
+                                                   center_x, center_y))
+
+    def _clickedInCircleHandler(self, event):
+        if event is not None:
+            mouse_x, mouse_y = event.x, event.y
+        else:
+            mouse_x = self._canvas.winfo_pointerx() - self._canvas.winfo_rootx()
+            mouse_y = self._canvas.winfo_pointery() - self._canvas.winfo_rooty()
+
+        center_x = self._canvas.winfo_width() / 2
+        center_y = self._canvas.winfo_height() / 2
+
+        p1x, p1y, p2x, p2y = self._canvas.coords(self.oval)
+        radius = (p2x - p1x) / 2
+
+        rel_x = mouse_x - center_x
+        rel_y = mouse_y - center_y
+
+        vector_len = np.sqrt(rel_x ** 2 + rel_y ** 2)
+        if vector_len > radius:
+            vector_len = radius
+            vector_angle = np.arctan2(rel_y, rel_x)
+            mouse_x = vector_len * np.cos(vector_angle) + center_x
+            mouse_y = vector_len * np.sin(vector_angle) + center_y
+
+        self._canvas.coords(self.velocity_vector, (center_x, center_y, mouse_x, mouse_y))
+
+        vector_amount_0_to_100 = int((vector_len / radius) * 100)
+
+        # rotate by 90 deg counter clockwise and then around new X axis
+        vector_angle = -np.arctan2(rel_x, -rel_y)
+
+        self._controller.setVelocityVector(vector_angle, vector_amount_0_to_100)
+
+        self._buttonPressedHandler(event)
+
+    def _buttonPressedHandler(self, event):
+        delay_ms = 50
+        if event is not None:
+            self._is_button_pressed = True
+            self._root.after(delay_ms, self._buttonPressedHandler, None)
+        elif self._is_button_pressed:
+            self._root.after(delay_ms, self._clickedInCircleHandler, None)
+
+    def _releasedCirceClickHandler(self, event):
+        self._is_button_pressed = False
+
+    def _onShow(self):
+        self.redraw()
+
+class PagePidDirectControl(MotorControlPage):
+    def __init__(self, controller):
+        MotorControlPage.__init__(self)
+
+        self._controller = controller
         self.small_font = Tk.font.Font(family = 'Consolas', size = 10)
         self.title_font = Tk.font.Font(family = 'Consolas', size = 18, weight = 'bold')
-
-        frame_title = Tk.Frame(self.root, height = 50, borderwidth = 3, relief = 'raised')
-        frame_motor = Tk.Frame(self.root, borderwidth = 3, relief = 'sunken')
-        frame_motor_control = Tk.Frame(frame_motor, borderwidth = 3, relief = 'groove')
-        frame_motor_graphs = Tk.Frame(frame_motor, borderwidth = 3, relief = 'groove')
-
-        frame_graph_width = 1100;
-        frame_graph_height = 350;
-        frame_graph = Tk.Frame(frame_motor_graphs, width = frame_graph_width, height = frame_graph_height, borderwidth = 3, relief = 'groove')
-
-        frame_title.pack(fill = Tk.X, side = Tk.TOP)
-        frame_motor.pack(fill = Tk.BOTH, side = Tk.TOP, expand = True)
-        frame_motor_control.pack(fill = Tk.X, side = Tk.TOP, expand = False, padx = 5, pady = 5)
-        frame_motor_graphs.pack(fill = Tk.BOTH, side = Tk.TOP, expand = True, padx = 5, pady = 5)
-
-        frame_graph.grid(row = 0, column = 0)
-        frame_motor_graphs.columnconfigure(index = 0, weight = 1)
-        frame_motor_graphs.rowconfigure(index = 0, weight = 1)
 
         column_labels = ["Kp", "Ki", "Kd", "Velocity"]
         row_labels = ["FR", "FL", "RR", "RL"]
@@ -204,18 +278,18 @@ class View:
         self.pid_entries = []
         self.velocity_entries = []
         for col_idx in range(len(column_labels)):
-            pid_label = Tk.Label(frame_motor_control, text = column_labels[col_idx], font = self.title_font)
+            pid_label = Tk.Label(self, text = column_labels[col_idx], font = self.title_font)
             pid_label.grid(row = 0, column = 2 * col_idx + 1, columnspan = 2, sticky = 'nsew', padx = 3, pady = 3)
 
         for row_idx in range(1, len(row_labels) + 1):
-            motor_label = Tk.Label(frame_motor_control, text = row_labels[row_idx - 1], font = self.title_font)
+            motor_label = Tk.Label(self, text = row_labels[row_idx - 1], font = self.title_font)
             motor_label.grid(row = row_idx, column = 0, sticky = 'nsew');
 
             pid_entries = []
             for col_idx in range(len(column_labels)):
-                entry = Tk.Entry(frame_motor_control, justify = Tk.CENTER, font = self.title_font)
-                button_left = Tk.Button(frame_motor_control, text = "<", font = self.title_font, borderwidth = 3, relief = 'raised')
-                button_right = Tk.Button(frame_motor_control, text = ">", font = self.title_font, borderwidth = 3, relief = 'raised')
+                entry = Tk.Entry(self, justify = Tk.CENTER, font = self.title_font)
+                button_left = Tk.Button(self, text = "<", font = self.title_font, borderwidth = 3, relief = 'raised')
+                button_right = Tk.Button(self, text = ">", font = self.title_font, borderwidth = 3, relief = 'raised')
 
                 button_left.bind('<Button-1>', lambda event, idx = col_idx: self._buttonClickedHandler(event, "decrement {}".format(idx)))
                 button_right.bind('<Button-1>', lambda event, idx = col_idx: self._buttonClickedHandler(event, "increment {}".format(idx)))
@@ -235,24 +309,16 @@ class View:
                     pid_entries.append(entry)
             self.pid_entries.append(pid_entries)
 
-        button = Tk.Button(frame_motor_control, text = "GO!", font = self.title_font, borderwidth = 3, relief = 'raised')
+        button = Tk.Button(self, text = "GO!", font = self.title_font, borderwidth = 3, relief = 'raised')
         button.bind('<Button-1>', lambda event, idx = col_idx: self._buttonClickedHandler(event, "go"))
         button.grid(row = len(row_labels) + 2, column = int(len(column_labels) / 2) + 1, columnspan = 4, sticky = 'nsew', padx = 20, pady = 5)
 
         for i in range(len(row_labels) + 2):
-            frame_motor_control.rowconfigure(index = i, weight = 1)
+            self.rowconfigure(index = i, weight = 1, minsize = 30)
 
-        frame_motor_control.columnconfigure(index = 0, weight = 1, minsize = 50)
+        self.columnconfigure(index = 0, weight = 1, minsize = 50)
         for i in range(1, 2 * len(column_labels) + 1):
-            frame_motor_control.columnconfigure(index = i, weight = 1)
-
-        title_label = Tk.Label(frame_title, text = "RoboMecanum Control Panel", font = self.title_font)
-        title_label.pack(fill = Tk.BOTH, side = Tk.TOP, expand = True)
-
-        self.motors_graph = MotorsFrameGraph(frame_graph)
-
-    def _windowExitHandler(self):
-        self._controller.windowExitHandler()
+            self.columnconfigure(index = i, weight = 1)
 
     def _buttonClickedHandler(self, event, metadata):
         if metadata.startswith("increment"):
@@ -286,6 +352,9 @@ class View:
     def _buttonReleasedHandler(self, event, metadata):
         self._is_button_pressed = False
 
+    def _onShow(self):
+        pass
+
     def getPidParameterEntry(self, motor_idx, entry_idx):
         return int(self.pid_entries[motor_idx][entry_idx].get())
 
@@ -311,6 +380,91 @@ class View:
     def getVelocity(self, motor_idx):
         return int(self.velocity_entries[motor_idx].get())
 
+
+class View:
+    def __init__(self, controller):
+        self._controller = controller
+        self._is_button_pressed = False
+
+        self.root = Tk.Tk()
+        self.root.title("RoboMecanum Control Panel")
+        self.root.attributes('-zoomed', True)
+        self.root.wm_minsize(width = 700, height = 650)
+        self.root.protocol('WM_DELETE_WINDOW', self._windowExitHandler)
+
+        self.small_font = Tk.font.Font(family = 'Consolas', size = 10)
+        self.title_font = Tk.font.Font(family = 'Consolas', size = 18, weight = 'bold')
+
+        frame_title = Tk.Frame(self.root, height = 50, borderwidth = 3, relief = 'raised')
+        frame_motor = Tk.Frame(self.root, borderwidth = 3, relief = 'sunken')
+        frame_motor_control = Tk.Frame(frame_motor, borderwidth = 3, relief = 'groove')
+        frame_motor_graphs = Tk.Frame(frame_motor, borderwidth = 3, relief = 'groove')
+
+        frame_graph_width = 1100;
+        frame_graph_height = 350;
+        frame_graph = Tk.Frame(frame_motor_graphs, width = frame_graph_width, height = frame_graph_height, borderwidth = 3, relief = 'groove')
+
+        frame_title.grid(row = 0, column = 0, sticky = 'ew')
+        frame_motor.grid(row = 1, column = 0, sticky = 'nsew')
+        self.root.rowconfigure(index = 0, weight = 0)
+        self.root.rowconfigure(index = 1, weight = 1)
+        self.root.columnconfigure(index = 0, weight = 1)
+
+        frame_motor_control.grid(row = 0, column = 0, sticky = 'nsew')
+        frame_motor_graphs.grid(row = 1, column = 0, sticky = 'ew')
+        frame_motor.rowconfigure(index = 0, weight = 1)
+        frame_motor.rowconfigure(index = 1, weight = 0)
+        frame_motor.columnconfigure(index = 0, weight = 1)
+
+        frame_graph.grid(row = 0, column = 0)
+        frame_motor_graphs.columnconfigure(index = 0, weight = 1)
+        frame_motor_graphs.rowconfigure(index = 0, weight = 1)
+
+        title_label = Tk.Label(frame_title, text = "RoboMecanum Control Panel", font = self.title_font)
+        pid_control_button = Tk.Button(frame_title, text = "PID Direct Control", font = self.title_font, borderwidth = 3, relief = 'raised')
+        pid_control_button.bind('<Button-1>', lambda event: self._buttonClickedHandler(event, "pid_control"))
+        velocity_vector_button = Tk.Button(frame_title, text = "Velocity Vector Control", font = self.title_font, borderwidth = 3, relief = 'raised')
+        velocity_vector_button.bind('<Button-1>', lambda event: self._buttonClickedHandler(event, "velocity_vector"))
+
+        title_label.pack(fill = Tk.X, side = Tk.LEFT, expand = True)
+        pid_control_button.pack(fill = Tk.X, side = Tk.LEFT, expand = True)
+        velocity_vector_button.pack(fill = Tk.X, side = Tk.LEFT, expand = True)
+
+        self._direct_pid_control = PagePidDirectControl(controller)
+        self._velocity_vector_control = PageVelocityVectorControl(self.root, controller)
+
+        self._velocity_vector_control.place(in_= frame_motor_control, x = 0, y = 0, relwidth = 1, relheight = 1)
+        self._direct_pid_control.place(in_= frame_motor_control, x = 0, y = 0, relwidth = 1, relheight = 1)
+
+        self.motors_graph = MotorsFrameGraph(frame_graph)
+
+        self._velocity_vector_control.show()
+
+    def _buttonClickedHandler(self, event, metadata):
+        if metadata == "pid_control":
+            self._direct_pid_control.show()
+        elif metadata == "velocity_vector":
+            self._velocity_vector_control.show()
+        elif metadata == "page1":
+            self.page1.show()
+        elif metadata == "page2":
+            self.page2.show()
+
+    def _windowExitHandler(self):
+        self._controller.windowExitHandler()
+
+    def getPidKp(self, motor_idx):
+        return self._direct_pid_control.getPidKp(motor_idx)
+
+    def getPidKi(self, motor_idx):
+        return self._direct_pid_control.getPidKi(motor_idx)
+
+    def getPidKd(self, motor_idx):
+        return self._direct_pid_control.getPidKd(motor_idx)
+
+    def getVelocity(self, motor_idx):
+        return self._direct_pid_control.getVelocity(motor_idx)
+
     def updateFrontRightMotorSpeed(self, value):
         self.motors_graph.setSpeed(0, value)
 
@@ -333,6 +487,12 @@ class View:
 
 
 class Controller:
+
+    ROBOT_MAX_SPEED = 0.5  # [m/s]
+    ROBOT_ENC_IMP_PER_REV = 4480 # [imp]
+    ROBOT_LX = 0.115 # [m]
+    ROBOT_LY = 0.14  # [m]
+    ROBOT_R  = 0.06  # [m]
 
     CMD_SETPOINT = "setpoint_{}={}\r"
     CMD_SETKP = "pidkp_{}={}\r"
@@ -388,6 +548,28 @@ class Controller:
                 print("Cannot convert speed to value: {}".format(line))
         else:
             print("Controller got new uart line: >>{}<<".format(line))
+
+    def calculateInverseKinematics(self, desired_speeds):
+        jacobian = np.array([
+                             [1,  1,  (self.ROBOT_LX + self.ROBOT_LY)],
+                             [1, -1, -(self.ROBOT_LX + self.ROBOT_LY)],
+                             [1, -1,  (self.ROBOT_LX + self.ROBOT_LY)],
+                             [1,  1, -(self.ROBOT_LX + self.ROBOT_LY)]
+                            ])
+        omegas_rad_per_sec = (1 / self.ROBOT_R) * jacobian.dot(desired_speeds)
+        omegas_enc_per_sec = ((omegas_rad_per_sec / (2 * np.pi)) * self.ROBOT_ENC_IMP_PER_REV)
+        omegas_enc_per_sec = omegas_enc_per_sec.astype(int)
+        return omegas_enc_per_sec
+
+    def setVelocityVector(self, angle_rad, amount_0_to_100):
+        desired_speed_m_per_sec = (amount_0_to_100 / 100) * self.ROBOT_MAX_SPEED
+        vx = desired_speed_m_per_sec * np.cos(angle_rad)
+        vy = desired_speed_m_per_sec * np.sin(angle_rad)
+        omega = 0
+        velocities = self.calculateInverseKinematics([vx, vy, omega])
+
+        for velocity, desc in zip(velocities, self.MOTOR_DESC):
+            self.PanelModel.sendStringOverUart(self.CMD_SETPOINT.format(desc, velocity))
 
     def setPidPoint(self):
         for idx, desc in zip(self.MOTOR_INDEXES, self.MOTOR_DESC):
