@@ -9,6 +9,10 @@
 
 #define HAL_RCC_GPIOE  HAL_RCC_GPIO
 
+#define ZIGBEE_PIN_PORT  GPIOD
+#define ZIGBEE_PIN_RESET 1
+#define ZIGBEE_PIN_KEY   2
+
 #define LED_PIN_PORT    GPIOD
 #define LED_PIN_GREEN   12
 #define LED_PIN_ORANGE  13
@@ -19,10 +23,10 @@
 #define VCP_USART       _GLUE(USART, VCP_USART_IDX)
 #define VCP_USART_RCC   _GLUE(HAL_RCC_USART, VCP_USART_IDX)
 #define VCP_USART_IRQn  _GLUE3(USART, VCP_USART_IDX, _IRQn)
-#define VCP_PIN_PORT    GPIOA
+#define VCP_PIN_PORT    GPIOD
 #define VCP_PIN_AF      HAL_GPIO_AF_7
-#define VCP_PIN_TX      2
-#define VCP_PIN_RX      3
+#define VCP_PIN_TX      5
+#define VCP_PIN_RX      6
 
 #define WALLCLOCK_TIMER_IDX    7
 #define WALLCLOCK_TIMER        _GLUE(TIM, WALLCLOCK_TIMER_IDX)

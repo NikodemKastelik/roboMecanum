@@ -45,22 +45,52 @@ class SerialDeviceManager(SerialDevice):
         self._read_queue = queue.Queue()
         self._write_queue = queue.Queue()
         self._running = False
+        self._bytes_send_per_access = 65535
+        self._serial_access_delay = 0
+        self._prefix = ""
         self._serial_device_loop_thread = threading.Thread(target = self._serialDeviceLoop)
 
     def _serialDeviceLoop(self):
+        timeout_start = 0
+        leftover = ""
+        bytes_to_send = ""
         while self._running:
+            if leftover and not bytes_to_send:
+                bytes_to_send = leftover
+                leftover = ""
+            else:
+                try:
+                    bytes_to_send += self._write_queue.get(block=False)
+                except queue.Empty:
+                    pass
+
+            if len(bytes_to_send) > self._bytes_send_per_access:
+                leftover += bytes_to_send[self._bytes_send_per_access:]
+                bytes_to_send = bytes_to_send[:self._bytes_send_per_access]
+
+            if bytes_to_send and time.perf_counter() > timeout_start + self._serial_access_delay:
+                self.write((self._prefix + bytes_to_send).encode())
+                print("Sending: >>{}<<".format(bytes_to_send.replace("\n","\\n")))
+                timeout_start = time.perf_counter()
+                bytes_to_send = ""
+
+            raw_line = self.readLine()
             try:
-                bytes_to_send = self._write_queue.get(block=False).encode()
-                self.write(bytes_to_send)
-            except queue.Empty:
-                pass
-            try:
-                line = self.readLine().decode()
+                line = raw_line.decode()
             except UnicodeDecodeError:
-                print("Cannot decode byte")
+                print("Cannot decode bytes: {}".format(raw_line))
                 line = ""
             if line:
                 self._read_queue.put(line)
+
+    def setBytesSendPerAccess(self, bytes_limit):
+        self._bytes_send_per_access = bytes_limit
+
+    def setPerAccessDelayMs(self, delay_ms):
+        self._serial_access_delay = delay_ms
+
+    def setPrefix(self, prefix):
+        self._prefix = prefix
 
     def recv(self):
         try:
@@ -84,9 +114,19 @@ class SerialDeviceManager(SerialDevice):
         self.close()
 
 class Model:
+
+    ZIGBEE_MAX_BYTES_PER_ACCESS = 46
+    ZIGBEE_DELAY_BETWEEN_ACCESS = 0.02
+    ZIGBEE_PREFIX               = "P2P FB31 "
+
     def __init__(self, controller):
         self._controller = controller
+
         self._uart_mngr = SerialDeviceManager("/dev/ttyUSB0")
+        self._uart_mngr.setBytesSendPerAccess(self.ZIGBEE_MAX_BYTES_PER_ACCESS)
+        self._uart_mngr.setPerAccessDelayMs(self.ZIGBEE_DELAY_BETWEEN_ACCESS)
+        self._uart_mngr.setPrefix(self.ZIGBEE_PREFIX)
+
         self._model_running = True
         self._uart_mngr_reader_loop_thread = threading.Thread(target = self._uartMngrReaderLoop)
         self._uart_mngr_reader_loop_thread.start()
@@ -494,10 +534,11 @@ class Controller:
     ROBOT_LY = 0.14  # [m]
     ROBOT_R  = 0.06  # [m]
 
-    CMD_SETPOINT = "setpoint_{}={}\r"
-    CMD_SETKP = "pidkp_{}={}\r"
-    CMD_SETKI = "pidki_{}={}\r"
-    CMD_SETKD = "pidkd_{}={}\r"
+    CMD_SETPOINTS = "sp={}={}={}={}\n"
+    CMD_SETPOINT = "setpoint_{}={}\n"
+    CMD_SETKP = "pidkp_{}={}\n"
+    CMD_SETKI = "pidki_{}={}\n"
+    CMD_SETKD = "pidkd_{}={}\n"
 
     INFO_SPEED = "Speed"
 
@@ -528,26 +569,17 @@ class Controller:
         self.PanelView.setPidParameterEntry(entry_idx, updated_val)
 
     def newUartDataHandler(self, line):
-        line = line.rstrip()
-
         if line.startswith(self.INFO_SPEED):
             try:
-                speed_value = int(line.split(" ")[-1])
-                motor_desc = line.split(" ")[-2]
-
-                if motor_desc.startswith("FR"):
-                    self.PanelView.updateFrontRightMotorSpeed(speed_value)
-                elif motor_desc.startswith("FL"):
-                    self.PanelView.updateFrontLeftMotorSpeed(speed_value)
-                elif motor_desc.startswith("RR"):
-                    self.PanelView.updateRearRightMotorSpeed(speed_value)
-                elif motor_desc.startswith("RL"):
-                    self.PanelView.updateRearLeftMotorSpeed(speed_value)
-
+                speed_values = line.rstrip().split("=")[1:]
+                self.PanelView.updateFrontRightMotorSpeed(int(speed_values[self.IDX_MOTOR_FR]))
+                self.PanelView.updateFrontLeftMotorSpeed(int(speed_values[self.IDX_MOTOR_FL]))
+                self.PanelView.updateRearRightMotorSpeed(int(speed_values[self.IDX_MOTOR_RR]))
+                self.PanelView.updateRearLeftMotorSpeed(int(speed_values[self.IDX_MOTOR_RL]))
             except ValueError:
-                print("Cannot convert speed to value: {}".format(line))
+                print("Cannot convert speed to value: {}".format(line.replace('\n', "\\n")))
         else:
-            print("Controller got new uart line: >>{}<<".format(line))
+            print("Controller got new uart line: >>{}<<".format(line.replace('\n', "\\n")))
 
     def calculateInverseKinematics(self, desired_speeds):
         jacobian = np.array([
@@ -568,6 +600,7 @@ class Controller:
         omega = 0
         velocities = self.calculateInverseKinematics([vx, vy, omega])
 
+        #self.PanelModel.sendStringOverUart(self.CMD_SETPOINTS.format(*velocities))
         for velocity, desc in zip(velocities, self.MOTOR_DESC):
             self.PanelModel.sendStringOverUart(self.CMD_SETPOINT.format(desc, velocity))
 

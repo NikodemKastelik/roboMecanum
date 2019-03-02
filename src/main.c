@@ -14,7 +14,7 @@
 
 #include <pinout.h>
 
-#define STR_TO_PROCESS_SIZE  64
+#define STR_TO_PROCESS_SIZE  32
 #define STRX_MNGR_BUFSIZE  128
 
 typedef struct
@@ -155,6 +155,18 @@ uint8_t robot_idx_from_desc_get(char * desc)
     return UINT8_MAX;
 }
 
+void robot_zigbee_init()
+{
+    hal_gpio_mode_cfg(ZIGBEE_PIN_PORT, ZIGBEE_PIN_RESET, HAL_GPIO_MODE_OUTPUT);
+    hal_gpio_mode_cfg(ZIGBEE_PIN_PORT, ZIGBEE_PIN_KEY, HAL_GPIO_MODE_OUTPUT);
+
+    hal_gpio_out_clr(ZIGBEE_PIN_PORT, ZIGBEE_PIN_RESET);
+    hal_gpio_out_clr(ZIGBEE_PIN_PORT, ZIGBEE_PIN_KEY);
+    dwt_delay_us(200000);
+    hal_gpio_out_set(ZIGBEE_PIN_PORT, ZIGBEE_PIN_RESET);
+    hal_gpio_out_set(ZIGBEE_PIN_PORT, ZIGBEE_PIN_KEY);
+}
+
 void robot_set_pwm(robot_motor_t * p_robot_motor)
 {
     TIM_TypeDef * pwm_timer = p_robot_motor->config->pwm_timer;
@@ -194,8 +206,6 @@ static void robot_pid_proc(robot_motor_t * p_robot_motor, int16_t enc_latest_rea
     int32_t steering_signal = pid_positional_proc(p_robot_pid, speed_imp_per_sec);
 
     p_robot_motor->new_pwm = steering_signal;
-
-    log_msg("Speed %s: %hd\n", p_robot_motor->config->desc, speed_imp_per_sec);
 }
 
 void log_out_handler(char * buf, uint32_t len)
@@ -225,13 +235,6 @@ void wallclock_handler(void)
 
     pid_proced = true;
 
-    /*
-    for (uint8_t idx = 0; idx < MOTOR_COUNT; idx++)
-    {
-        robot_set_pwm(&robot_motors[idx]);
-    }
-    */
-
     hal_gpio_out_toggle(LED_PIN_PORT, LED_PIN_ORANGE);
 
     hal_tim_evt_clear(WALLCLOCK_TIMER, HAL_TIM_EVT_UPDATE);
@@ -250,8 +253,6 @@ void vcp_usart_handler(drv_usart_evt_t evt, uint8_t const * buf)
             drv_usart_rx(&vcp_usart, &recv_byte, 1);
 
             strx_mngr_feed(&strx_mngr, chr);
-
-            //log_msg("Usart got byte: 0x%x : %c\n", chr, chr);
 
             break;
 
@@ -281,8 +282,8 @@ int main(void)
     // Kp = 600, Ki = 300, for PWM_Freq = 8 MHz
     const pid_cfg_t pidcfg =
     {
-        .kp_q = 0,
-        .ki_q = 0,
+        .kp_q = 600,
+        .ki_q = 300,
         .kd_q = 0,
         .q    = 8,
         .output_min = 0,
@@ -346,6 +347,8 @@ int main(void)
     drv_usart_init(&vcp_usart, &cfg, vcp_usart_handler);
     drv_usart_rx(&vcp_usart, &recv_byte, 1);
 
+    robot_zigbee_init();
+
     __enable_irq();
 
     char string_to_process[STR_TO_PROCESS_SIZE];
@@ -359,16 +362,34 @@ int main(void)
             {
                 robot_set_pwm(&robot_motors[idx]);
             }
+            log_msg("Speed=%hd=%hd=%hd=%hd\n", robot_motors[MOTOR_FR_IDX].pid.last_point,
+                                               robot_motors[MOTOR_FL_IDX].pid.last_point,
+                                               robot_motors[MOTOR_RR_IDX].pid.last_point,
+                                               robot_motors[MOTOR_RL_IDX].pid.last_point);
         }
 
         if (!drv_usart_tx_ongoing_check(&vcp_usart))
         {
+            dwt_delay_us(10000);
             log_process();
         }
 
         if (strx_mngr_retrieve(&strx_mngr, string_to_process))
         {
-            if (mini_strstartswith(string_to_process, "setpoint_"))
+
+            if (mini_strstartswith(string_to_process, "sp="))
+            {
+                char * str_ptr = string_to_process;
+                for (uint8_t i = 0; i < MOTOR_COUNT; i++)
+                {
+                    str_ptr = mini_strchr(str_ptr, '=') + 1;
+                    int32_t new_point = mini_atoi(str_ptr);
+                    pid_point_set(&robot_motors[i].pid, new_point);
+                    log_msg("New point for motor %s: %d\n", robot_motors[i].config->desc, new_point);
+                }
+            }
+
+            else if (mini_strstartswith(string_to_process, "setpoint_"))
             {
                 uint32_t idx = ARRAY_SIZE("setpoint_") - 1;
 
