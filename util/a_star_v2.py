@@ -3,6 +3,7 @@ import time
 import threading
 
 import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
 import matplotlib.animation as animation
 from matplotlib import style
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -75,8 +76,8 @@ class Main():
         self.root.title('This is my root window')
 
         dpi = 100
-        fig = plt.figure(figsize=(width / float(dpi), height / float(dpi)), dpi = dpi)
-        plotcanvas = FigureCanvasTkAgg(fig, self.root)
+        self.fig = plt.figure(figsize=(width / float(dpi), height / float(dpi)), dpi = dpi)
+        plotcanvas = FigureCanvasTkAgg(self.fig, self.root)
         plotcanvas.get_tk_widget().grid(column=1, row=1)
         plotcanvas.mpl_connect('button_press_event', self.plot_clicked_handler)
 
@@ -90,7 +91,7 @@ class Main():
         self.ax.add_artist(self.plot_sensor_circle)
         self.plot_obst_circles = []
 
-        self.ani = animation.FuncAnimation(fig, self.update_plot, interval = 10, blit = True)
+        self.ani = animation.FuncAnimation(self.fig, self.update_plot, interval = 10, blit = True)
 
         self.root.protocol('WM_DELETE_WINDOW', self.exit_handler)
 
@@ -113,8 +114,14 @@ class Main():
         self.plot_robot.set_xdata([self.robot.px])
         self.plot_robot.set_ydata([self.robot.py])
 
-        self.ax.set_xlim(min(self.obx) - 100, max(self.obx) + 100)
-        self.ax.set_ylim(min(self.oby) - 100, max(self.oby) + 100)
+        self.ax.set_xlim(min(self.obx), max(self.obx))
+        self.ax.set_ylim(min(self.oby), max(self.oby))
+
+        #self.ax.set_xticks(np.arange(min(self.obx), max(self.obx) + 1, self.robot.radius))
+        #self.ax.set_yticks(np.arange(min(self.oby), max(self.oby) + 1, self.robot.radius))
+        self.ax.xaxis.set_major_locator(ticker.AutoLocator())
+        self.ax.yaxis.set_major_locator(ticker.AutoLocator())
+        self.ax.grid(which = 'major', alpha = 0.5)
 
         self.plot_sensor_circle.center = (self.robot.px, self.robot.py)
 
@@ -169,6 +176,7 @@ class Main():
                     for (x,y) in objxy:
                         self.obx.append(x)
                         self.oby.append(y)
+                    self.root.after(10, self.fig.canvas.draw)
                     continue
                 else:
                     raise e
