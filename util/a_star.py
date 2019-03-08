@@ -10,6 +10,7 @@ See Wikipedia article (https://en.wikipedia.org/wiki/A*_search_algorithm)
 
 import matplotlib.pyplot as plt
 import math
+import time
 
 show_animation = True
 
@@ -25,19 +26,23 @@ class Node:
     def __str__(self):
         return str(self.x) + "," + str(self.y) + "," + str(self.cost) + "," + str(self.pind)
 
+def calc_node_idx(x, minx, reso):
+    return math.floor((x - minx) / reso)
 
-def calc_final_path(ngoal, closedset, reso):
+def calc_node_coord(ix, minx, reso):
+    return minx + ix * reso# + reso / 2
+
+def calc_final_path(ngoal, closedset, minx, miny, reso):
     # generate final course
-    rx, ry = [ngoal.x * reso], [ngoal.y * reso]
+    rx, ry = [calc_node_coord(ngoal.x, minx, reso)], [calc_node_coord(ngoal.y, miny, reso)]
     pind = ngoal.pind
     while pind != -1:
         n = closedset[pind]
-        rx.append(n.x * reso)
-        ry.append(n.y * reso)
+        rx.append(calc_node_coord(n.x, minx, reso))
+        ry.append(calc_node_coord(n.y, miny, reso))
         pind = n.pind
 
     return rx, ry
-
 
 def a_star_planning(sx, sy, gx, gy, ox, oy, reso, rr):
     """
@@ -49,10 +54,11 @@ def a_star_planning(sx, sy, gx, gy, ox, oy, reso, rr):
     rr: robot radius[m]
     """
 
-    nstart = Node(round(sx / reso), round(sy / reso), 0.0, -1)
-    ngoal = Node(round(gx / reso), round(gy / reso), 0.0, -1)
-    ox = [iox / reso for iox in ox]
-    oy = [ioy / reso for ioy in oy]
+    minnx = round(min(ox))
+    minny = round(min(oy))
+
+    nstart = Node(calc_node_idx(sx, minnx, reso), calc_node_idx(sy, minny, reso), 0.0, -1)
+    ngoal = Node(calc_node_idx(gx, minnx, reso), calc_node_idx(gy, minny, reso), 0.0, -1)
 
     obmap, minx, miny, maxx, maxy, xw, yw = calc_obstacle_map(ox, oy, reso, rr)
 
@@ -68,7 +74,7 @@ def a_star_planning(sx, sy, gx, gy, ox, oy, reso, rr):
 
         # show graph
         if show_animation:  # pragma: no cover
-            plt.plot(current.x * reso, current.y * reso, "xc")
+            plt.plot(calc_node_coord(current.x, minnx, reso), calc_node_coord(current.y, minny, reso), "xc")
             if len(closedset.keys()) % 10 == 0:
                 plt.pause(0.001)
 
@@ -103,7 +109,7 @@ def a_star_planning(sx, sy, gx, gy, ox, oy, reso, rr):
                     # This path is the best until now. record it!
                     openset[n_id] = node
 
-    rx, ry = calc_final_path(ngoal, closedset, reso)
+    rx, ry = calc_final_path(ngoal, closedset, minnx, minny, reso)
 
     return rx, ry
 
@@ -141,40 +147,32 @@ def verify_node(node, obmap, minx, miny, maxx, maxy):
 
     return True
 
-
 def calc_obstacle_map(ox, oy, reso, vr):
-
     minx = round(min(ox))
     miny = round(min(oy))
     maxx = round(max(ox))
     maxy = round(max(oy))
-    print("minx:", minx)
-    print("miny:", miny)
-    print("maxx:", maxx)
-    print("maxy:", maxy)
 
-    xwidth = (round(maxx - minx))
-    ywidth = (round(maxy - miny))
-    print("xwidth:", xwidth)
-    print("ywidth:", ywidth)
-    print("obmapsize XY: {}x{}".format(xwidth, ywidth))
+    xwidth = round((maxx - minx) / reso) + 1
+    ywidth = round((maxy - miny) / reso) + 1
 
-    # obstacle map generation
     obmap = [[False for i in range(ywidth)] for i in range(xwidth)]
-    for ix in range(xwidth):
-        x = ix + minx
-        for iy in range(ywidth):
-            y = iy + miny
-            for iox, ioy in zip(ox, oy):
-                d = math.sqrt((iox - x)**2 + (ioy - y)**2)
-                if d <= vr / reso:
-                    obmap[ix][iy] = True
+    di = math.ceil(vr / reso)
+    for iox, ioy in zip(ox, oy):
+        ix = calc_node_idx(iox, minx, reso)
+        iy = calc_node_idx(ioy, miny, reso)
+        for x in range(ix - di, ix + di + 1):
+            for y in range(iy - di, iy + di + 1):
+                if 0 <= x < xwidth and 0 <= y < ywidth:
+                    d = math.sqrt((iox - (iox + (x - ix) * reso)) ** 2 + (ioy - (ioy + (y - iy) * reso)) ** 2)
+                    if d <= vr:
+                        obmap[x][y] = True
 
-    return obmap, minx, miny, maxx, maxy, xwidth, ywidth
+    return obmap, 0, 0, xwidth, ywidth, xwidth, ywidth
 
 
 def calc_index(node, xwidth, xmin, ymin):
-    return (node.y - ymin) * xwidth + (node.x - xmin)
+    return node.x * xwidth + node.y
 
 
 def get_motion_model():
@@ -195,9 +193,9 @@ def main():
     print(__file__ + " start!!")
 
     # start and goal position
-    sx = 10.0  # [m]
-    sy = 10.0  # [m]
-    gx = 65.0  # [m]
+    sx = 23.2  # [m]
+    sy = 17.5  # [m]
+    gx = 55.0  # [m]
     gy = 50.0  # [m]
     grid_size = 2.0  # [m]
     robot_size = 2.5  # [m]
@@ -205,7 +203,7 @@ def main():
     ox, oy = [], []
 
     start = 0.0
-    for i in range(70):
+    for i in range(-10, 70):
         ox.append(i)
         oy.append(0.0)
     for i in range(60):
@@ -241,4 +239,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
