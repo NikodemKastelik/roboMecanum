@@ -13,6 +13,7 @@ import numpy as np
 import threading
 import queue
 import time
+import math
 
 class SerialDevice:
     def __init__(self, port, baudrate = 115200, read_timeout = 0):
@@ -478,10 +479,13 @@ class PagePathPlannerControl(MotorControlPage):
         self.ax.add_artist(self.plot_sensor_circle)
         self.plot_obst_circles = []
 
+        self.fig.canvas.mpl_connect('button_press_event', lambda event: self._buttonClickedHandler(event, "canvasclick"))
         self.ani = animation.FuncAnimation(self.fig, self._updatePlot, interval = 10, blit = True)
 
     def _buttonClickedHandler(self, event, metadata):
-        if metadata == "zoomin":
+        if metadata == "canvasclick":
+            self.setGoalPosition(event.xdata, event.ydata)
+        elif metadata == "zoomin":
             self.changeLimitsBy(-1.0)
         elif metadata == "zoomout":
             self.changeLimitsBy(1.0)
@@ -648,6 +652,9 @@ class View:
     def setRobotOrientation(self, theta):
         self._path_planning_control.setRobotOrientation(theta)
 
+    def setRobotPath(self, pathx, pathy):
+        self._path_planning_control.setPath(pathx, pathy)
+
     def updateFrontRightMotorSpeed(self, value):
         self.motors_graph.setSpeed(0, value)
 
@@ -668,6 +675,161 @@ class View:
         self.root.deiconify()
         self.root.mainloop()
 
+class AStarNode:
+    def __init__(self, x, y, cost, pind):
+        self.x = x
+        self.y = y
+        self.cost = cost
+        self.pind = pind
+
+    def __str__(self):
+        return str(self.x) + "," + str(self.y) + "," + str(self.cost) + "," + str(self.pind)
+
+class AStarPathPlanner:
+    def __init__(self, reso, safedist):
+        self.reso = reso
+        self.safedist = safedist
+
+    def _calculateNodeIndex(self, x, minx, reso):
+        return math.floor((x - minx) / reso)
+
+    def _calculateNodeCoordinates(self, ix, minx, reso):
+        return minx + ix * reso
+
+    def _calculateFinalPath(self, ngoal, closedset, minx, miny, reso):
+        # generate final course
+        rx = [self._calculateNodeCoordinates(ngoal.x, minx, reso)]
+        ry = [self._calculateNodeCoordinates(ngoal.y, miny, reso)]
+        pind = ngoal.pind
+        while pind != -1:
+            n = closedset[pind]
+            rx.append(self._calculateNodeCoordinates(n.x, minx, reso))
+            ry.append(self._calculateNodeCoordinates(n.y, miny, reso))
+            pind = n.pind
+        return rx, ry
+
+    def _calculateHeuristic(self, n1, n2):
+        w = 1.0  # weight of heuristic
+        d = w * math.sqrt((n1.x - n2.x)**2 + (n1.y - n2.y)**2)
+        return d
+
+    def _verifyNode(self, node, obmap, minx, miny, maxx, maxy):
+        if node.x < minx:
+            return False
+        elif node.y < miny:
+            return False
+        elif node.x >= maxx:
+            return False
+        elif node.y >= maxy:
+            return False
+
+        if obmap[(node.x)][(node.y)]:
+            return False
+        return True
+
+    def _calculateObstacleMap(self, ox, oy, reso, vr):
+        minx = round(min(ox))
+        miny = round(min(oy))
+        maxx = round(max(ox))
+        maxy = round(max(oy))
+
+        xwidth = round((maxx - minx) / reso) + 1
+        ywidth = round((maxy - miny) / reso) + 1
+
+        obmap = [[False for i in range(ywidth)] for i in range(xwidth)]
+        di = math.ceil(vr / reso)
+        for iox, ioy in zip(ox, oy):
+            ix = self._calculateNodeIndex(iox, minx, reso)
+            iy = self._calculateNodeIndex(ioy, miny, reso)
+            for x in range(ix - di, ix + di + 1):
+                for y in range(iy - di, iy + di + 1):
+                    if 0 <= x < xwidth and 0 <= y < ywidth:
+                        d = math.sqrt((iox - (iox + (x - ix) * reso)) ** 2 + (ioy - (ioy + (y - iy) * reso)) ** 2)
+                        if d <= vr:
+                            obmap[x][y] = True
+        return obmap, 0, 0, xwidth, ywidth, xwidth, ywidth
+
+    def _calcIndex(self, node, xwidth, xmin, ymin):
+        return node.x * xwidth + node.y
+
+    def _getMotionModel(self):
+        # dx, dy, cost
+        motion = [[1, 0, 1],
+                  [0, 1, 1],
+                  [-1, 0, 1],
+                  [0, -1, 1],
+                  [-1, -1, math.sqrt(2)],
+                  [-1, 1, math.sqrt(2)],
+                  [1, -1, math.sqrt(2)],
+                  [1, 1, math.sqrt(2)]]
+        return motion
+
+    def planPath(self, sx, sy, gx, gy, ox, oy):
+        """
+        gx: goal x position [m]
+        gx: goal x position [m]
+        ox: x position list of Obstacles [m]
+        oy: y position list of Obstacles [m]
+        reso: grid resolution [m]
+        rr: robot radius[m]
+        """
+
+        reso = self.reso
+        rr = self.safedist
+
+        minnx = round(min(ox))
+        minny = round(min(oy))
+
+        nstart = AStarNode(self._calculateNodeIndex(sx, minnx, reso),
+                           self._calculateNodeIndex(sy, minny, reso), 0.0, -1)
+
+        ngoal = AStarNode(self._calculateNodeIndex(gx, minnx, reso),
+                          self._calculateNodeIndex(gy, minny, reso), 0.0, -1)
+
+        obmap, minx, miny, maxx, maxy, xw, yw = self._calculateObstacleMap(ox, oy, self.reso, self.safedist)
+
+        motion = self._getMotionModel()
+
+        openset, closedset = dict(), dict()
+        openset[self._calcIndex(nstart, xw, minx, miny)] = nstart
+
+        while 1:
+            c_id = min(
+                openset, key=lambda o: openset[o].cost + self._calculateHeuristic(ngoal, openset[o]))
+            current = openset[c_id]
+
+            if current.x == ngoal.x and current.y == ngoal.y:
+                ngoal.pind = current.pind
+                ngoal.cost = current.cost
+                break
+
+            # Remove the item from the open set
+            del openset[c_id]
+            # Add it to the closed set
+            closedset[c_id] = current
+
+            # expand search grid based on motion model
+            for i, _ in enumerate(motion):
+                node = AStarNode(current.x + motion[i][0],
+                                 current.y + motion[i][1],
+                                 current.cost + motion[i][2],
+                                 c_id)
+                n_id = self._calcIndex(node, xw, minx, miny)
+
+                if n_id in closedset:
+                    continue
+
+                if not self._verifyNode(node, obmap, minx, miny, maxx, maxy):
+                    continue
+
+                if n_id not in openset:
+                    openset[n_id] = node  # Discover a new node
+                else:
+                    if openset[n_id].cost >= node.cost:
+                        # This path is the best until now. record it!
+                        openset[n_id] = node
+
+        return self._calculateFinalPath(ngoal, closedset, minnx, minny, reso)
 
 class Controller:
 
@@ -676,6 +838,7 @@ class Controller:
     ROBOT_LX = 0.115 # [m]
     ROBOT_LY = 0.14  # [m]
     ROBOT_R  = 0.06  # [m]
+    ROBOT_SIZE_RADIUS = 0.2
 
     ROBOT_DT = 0.03125
 
@@ -705,6 +868,8 @@ class Controller:
     def __init__(self):
         self.PanelView = View(self)
         self.PanelModel = Model(self)
+        self.PathPlanner = AStarPathPlanner(0.1, self.ROBOT_SIZE_RADIUS)
+        self.PanelView.setRobotPath(*self.PathPlanner.planPath(1, 1, 5, 5, [0, 10, 10, 0], [0, 0, 10, 10]))
 
         self.PanelView.setRobotOrientation(np.deg2rad(90))
 
