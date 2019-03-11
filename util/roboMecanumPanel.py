@@ -3,6 +3,7 @@ from tkinter import font
 
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
+import matplotlib.ticker as ticker
 from matplotlib import style
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 style.use('ggplot')
@@ -420,6 +421,133 @@ class PagePidDirectControl(MotorControlPage):
     def getVelocity(self, motor_idx):
         return int(self.velocity_entries[motor_idx].get())
 
+class PagePathPlannerControl(MotorControlPage):
+    def __init__(self, root, controller):
+        MotorControlPage.__init__(self)
+        self._controller = controller
+        self._root = root
+
+        self.robotx = 0
+        self.roboty = 0
+        self.robottheta = 0
+
+        self.goalx = 0
+        self.goaly = 0
+
+        self.pathx = []
+        self.pathy = []
+
+        self.obstaclesx = []
+        self.obstaclesy = []
+
+        frame_graph_and_buttons = Tk.Frame(self)
+        frame_graph_and_buttons.pack()
+
+        frame_graph_width = 900;
+        frame_graph_height = 350;
+        frame_graph = Tk.Frame(frame_graph_and_buttons, width = frame_graph_width, height = frame_graph_height, borderwidth = 3, relief = 'groove')
+        frame_graph.pack(side = Tk.LEFT)
+
+        buttons_graph_width = 200;
+        buttons_graph_height = frame_graph_height
+        frame_buttons = Tk.Frame(frame_graph_and_buttons, borderwidth = 3, width = buttons_graph_width, height = buttons_graph_height, relief = 'groove')
+        frame_buttons.pack(side = Tk.LEFT)
+        frame_buttons.pack_propagate(False)
+
+        buttons_configs = [("Zoom+", "zoomin"), ("Zoom-", "zoomout"), ("GO!", "go")]
+        for button_text, button_metadata in buttons_configs:
+            button = Tk.Button(frame_buttons, text = button_text, width = 15, borderwidth = 3, relief = 'raised')
+            button.bind('<Button-1>', lambda event, metadata = button_metadata: self._buttonClickedHandler(event, metadata))
+            button.pack(side = Tk.TOP, pady = 10)
+
+        root.update_idletasks()
+
+        dpi = 100
+        self.fig = plt.figure(figsize=(frame_graph['width'] / float(dpi), frame_graph['height'] / float(dpi)), dpi = dpi)
+        plotcanvas = FigureCanvasTkAgg(self.fig, frame_graph)
+        plotcanvas.get_tk_widget().pack()
+        self.ax = self.fig.gca()
+        self.ax.set_xlim(-5.0, 5.0)
+        self.ax.set_ylim(-5.0, 5.0)
+        self.ax.set_aspect('equal', adjustable = 'box')
+        self.plot_path, = self.ax.plot([], [], ".r", markersize = 3)
+        self.plot_bounds, = self.ax.plot([], [], ".g", markersize = 20)
+        self.plot_goal, = self.ax.plot([], [], "*r", markersize = 10)
+        self.plot_robot, = self.ax.plot([], [], "sb", markersize = 6)
+        self.plot_sensor_circle = plt.Circle((self.robotx, self.roboty), 100, fill = False)
+        self.ax.add_artist(self.plot_sensor_circle)
+        self.plot_obst_circles = []
+
+        self.ani = animation.FuncAnimation(self.fig, self._updatePlot, interval = 10, blit = True)
+
+    def _buttonClickedHandler(self, event, metadata):
+        if metadata == "zoomin":
+            self.changeLimitsBy(-1.0)
+        elif metadata == "zoomout":
+            self.changeLimitsBy(1.0)
+        elif metadata == "go":
+            pass
+        elif metadata == "stop":
+            pass
+
+    def _updatePlot(self, i):
+        self.plot_path.set_xdata(self.pathx)
+        self.plot_path.set_ydata(self.pathy)
+
+        self.plot_bounds.set_xdata(self.obstaclesx)
+        self.plot_bounds.set_ydata(self.obstaclesy)
+
+        self.plot_goal.set_xdata(self.goalx)
+        self.plot_goal.set_ydata(self.goaly)
+
+        self.plot_robot.set_xdata(self.robotx)
+        self.plot_robot.set_ydata(self.roboty)
+
+        self.ax.xaxis.set_major_locator(ticker.AutoLocator())
+        self.ax.yaxis.set_major_locator(ticker.AutoLocator())
+        self.ax.grid(which = 'major', alpha = 0.5)
+
+        self.plot_sensor_circle.center = (self.robotx, self.roboty)
+
+        return [self.plot_path,
+                self.plot_bounds,
+                self.plot_goal,
+                self.plot_robot,
+                self.plot_sensor_circle,
+                *self.plot_obst_circles]
+
+    def changeLimitsBy(self, value):
+        xmin, xmax, = self.ax.get_xlim()
+        self.ax.set_xlim(xmin - value, xmax + value)
+
+        ymin, ymax, = self.ax.get_ylim()
+        self.ax.set_ylim(ymin - value, ymax + value)
+
+        self.fig.canvas.draw()
+
+    def setPath(self, pathx, pathy):
+        self.pathx = pathx
+        self.pathy = pathy
+
+    def setGoalPosition(self, x, y):
+        self.goalx = x
+        self.goaly = y
+
+    def getRobotPosition(self):
+        return self.robotx, self.roboty
+
+    def setRobotPosition(self, x, y):
+        self.robotx = x
+        self.roboty = y
+
+    def getRobotOrientation(self):
+        return self.robottheta
+
+    def setRobotOrientation(self, theta):
+        self.robottheta = theta
+
+    def _onShow(self):
+        pass
 
 class View:
     def __init__(self, controller):
@@ -465,16 +593,21 @@ class View:
         pid_control_button.bind('<Button-1>', lambda event: self._buttonClickedHandler(event, "pid_control"))
         velocity_vector_button = Tk.Button(frame_title, text = "Velocity Vector Control", font = self.title_font, borderwidth = 3, relief = 'raised')
         velocity_vector_button.bind('<Button-1>', lambda event: self._buttonClickedHandler(event, "velocity_vector"))
+        path_control_button = Tk.Button(frame_title, text = "Path Planning", font = self.title_font, borderwidth = 3, relief = 'raised')
+        path_control_button.bind('<Button-1>', lambda event: self._buttonClickedHandler(event, "path_planning"))
 
         title_label.pack(fill = Tk.X, side = Tk.LEFT, expand = True)
         pid_control_button.pack(fill = Tk.X, side = Tk.LEFT, expand = True)
         velocity_vector_button.pack(fill = Tk.X, side = Tk.LEFT, expand = True)
+        path_control_button.pack(fill = Tk.X, side = Tk.LEFT, expand = True)
 
         self._direct_pid_control = PagePidDirectControl(controller)
         self._velocity_vector_control = PageVelocityVectorControl(self.root, controller)
+        self._path_planning_control = PagePathPlannerControl(self.root, controller)
 
         self._velocity_vector_control.place(in_= frame_motor_control, x = 0, y = 0, relwidth = 1, relheight = 1)
         self._direct_pid_control.place(in_= frame_motor_control, x = 0, y = 0, relwidth = 1, relheight = 1)
+        self._path_planning_control.place(in_= frame_motor_control, x = 0, y = 0, relwidth = 1, relheight = 1)
 
         self.motors_graph = MotorsFrameGraph(frame_graph)
 
@@ -485,10 +618,8 @@ class View:
             self._direct_pid_control.show()
         elif metadata == "velocity_vector":
             self._velocity_vector_control.show()
-        elif metadata == "page1":
-            self.page1.show()
-        elif metadata == "page2":
-            self.page2.show()
+        elif metadata == "path_planning":
+            self._path_planning_control.show()
 
     def _windowExitHandler(self):
         self._controller.windowExitHandler()
@@ -504,6 +635,18 @@ class View:
 
     def getVelocity(self, motor_idx):
         return self._direct_pid_control.getVelocity(motor_idx)
+
+    def getRobotPosition(self):
+        return self._path_planning_control.getRobotPosition()
+
+    def setRobotPosition(self, x, y):
+        self._path_planning_control.setRobotPosition(x, y)
+
+    def getRobotOrientation(self):
+        return self._path_planning_control.getRobotOrientation()
+
+    def setRobotOrientation(self, theta):
+        self._path_planning_control.setRobotOrientation(theta)
 
     def updateFrontRightMotorSpeed(self, value):
         self.motors_graph.setSpeed(0, value)
@@ -534,6 +677,11 @@ class Controller:
     ROBOT_LY = 0.14  # [m]
     ROBOT_R  = 0.06  # [m]
 
+    ROBOT_DT = 0.03125
+
+    ROBOT_WHEEL_ALPHA = np.deg2rad(45.0)
+    ROBOT_WHEEL_BETA = 1.0
+
     CMD_SETPOINTS = "sp={}={}={}={}\n"
     CMD_SETPOINT = "setpoint_{}={}\n"
     CMD_SETKP = "pidkp_{}={}\n"
@@ -558,6 +706,8 @@ class Controller:
         self.PanelView = View(self)
         self.PanelModel = Model(self)
 
+        self.PanelView.setRobotOrientation(np.deg2rad(90))
+
     def incrementPidParamEntryHandler(self, entry_idx):
         current_val = self.PanelView.getPidParameterEntry(entry_idx)
         updated_val = current_val + 1
@@ -571,15 +721,53 @@ class Controller:
     def newUartDataHandler(self, line):
         if line.startswith(self.INFO_SPEED):
             try:
-                speed_values = line.rstrip().split("=")[1:]
-                self.PanelView.updateFrontRightMotorSpeed(int(speed_values[self.IDX_MOTOR_FR]))
-                self.PanelView.updateFrontLeftMotorSpeed(int(speed_values[self.IDX_MOTOR_FL]))
-                self.PanelView.updateRearRightMotorSpeed(int(speed_values[self.IDX_MOTOR_RR]))
-                self.PanelView.updateRearLeftMotorSpeed(int(speed_values[self.IDX_MOTOR_RL]))
+                speed_values = list(map(int, line.rstrip().split("=")[1:]))
+                self.PanelView.updateFrontRightMotorSpeed(speed_values[self.IDX_MOTOR_FR])
+                self.PanelView.updateFrontLeftMotorSpeed(speed_values[self.IDX_MOTOR_FL])
+                self.PanelView.updateRearRightMotorSpeed(speed_values[self.IDX_MOTOR_RR])
+                self.PanelView.updateRearLeftMotorSpeed(speed_values[self.IDX_MOTOR_RL])
+                self.setNewRobotPositionGivenWheelDistances(speed_values, self.ROBOT_DT)
             except ValueError:
                 print("Cannot convert speed to value: {}".format(line.replace('\n', "\\n")))
         else:
             print("Controller got new uart line: >>{}<<".format(line.replace('\n', "\\n")))
+
+    def convertEncoderImpulsesToMeters(self, enc_imp):
+        return (enc_imp / self.ROBOT_ENC_IMP_PER_REV) * 2 * np.pi * self.ROBOT_R
+
+    def translateRobotVelocitiesToGlobalVelocities(self, vx, vy, omega, theta):
+        # rotate counter clockwise by theta
+        vx_trans = vx * np.cos(theta) - vy * np.sin(theta)
+        vy_trans = vx * np.sin(theta) + vy * np.cos(theta)
+
+        omega_trans = omega
+
+        return vx_trans, vy_trans, omega_trans
+
+    def translateGlobalVelocitiesToLocalVelocities(self, vx, vy, omega, theta):
+        pass
+
+    def setNewRobotPositionGivenRobotVelocities(self, vx, vy, omega, dt):
+        vx, vy, omega = [self.convertEncoderImpulsesToMeters(vel_imp_per_sec) for vel_imp_per_sec in [vx, vy, omega]]
+
+        current_x, current_y = self.PanelView.getRobotPosition()
+        current_theta = self.PanelView.getRobotOrientation()
+
+        vx, vy, omega = self.translateRobotVelocitiesToGlobalVelocities(vx, vy, omega, current_theta)
+
+        current_x += vx * dt
+        current_y += vy * dt
+        current_theta += omega * dt
+
+        self.PanelView.setRobotPosition(current_x, current_y)
+        self.PanelView.setRobotOrientation(current_theta)
+
+    def setNewRobotPositionGivenWheelDistances(self, given_wheel_positions, dt):
+        d1, d2, d3, d4 = given_wheel_positions
+        vx = 0.25 * (d1 + d2 + d3 + d4)
+        vy = 0.25 * (d1 - d2 - d3 + d4) * np.tan(self.ROBOT_WHEEL_ALPHA)
+        omega = (d1 - d2 + d3 - d4) * self.ROBOT_WHEEL_BETA
+        self.setNewRobotPositionGivenRobotVelocities(vx, vy, omega, dt)
 
     def calculateInverseKinematics(self, desired_speeds):
         jacobian = np.array([
