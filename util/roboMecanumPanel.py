@@ -30,7 +30,7 @@ class AStarAlgorithm:
     def __init__(self, reso, safedist):
         self.reso = reso
         self.safedist = safedist
-        self._createVirtualBoundaries(-10.0, -10.0, 10.0, 10.0)
+        self._createVirtualBoundaries(-20.0, -20.0, 20.0, 20.0)
 
     def _createVirtualBoundaries(self, px1, py1, px2, py2):
         lower_x = min(px1, px2)
@@ -226,7 +226,8 @@ class AStarAlgorithm:
        return np.sqrt((px - gx) ** 2 + (py - gy) ** 2) <= self.safedist
 
 class PathPlanner:
-    def __init__(self, algorithm):
+    def __init__(self, path_observable, algorithm):
+        self._observable = path_observable
         self._algo = algorithm
         self._sx = 0
         self._sy = 0
@@ -236,27 +237,43 @@ class PathPlanner:
         self._pathy = []
         self._obx = []
         self._oby = []
-        self._planning = False
         self._finished = False
-        self._running = True
-        self._algo_thread = threading.Thread(target = self._algorithmLoop)
-        self._algo_thread.start()
+        self._running = False
+        self._algo_thread = None
 
-    def _algorithmLoop(self,):
+    def _algorithmLoopProcess(self, pipe):
+        pathx, pathy = self._algo.planPath(self._sx, self._sy,
+                                           self._gx, self._gy,
+                                           self._obx, self._oby)
+        pipe.send((pathx, pathy))
+
+    def _algorithmLoop(self):
         while self._running:
-            if self._planning:
-                try:
-                    time_start = time.perf_counter()
-                    self._pathx, self._pathy = self._algo.planPath(self._sx, self._sy,
-                                                                   self._gx, self._gy,
-                                                                   self._obx, self._oby)
-                    print("Astar took: {} [s]".format(time.perf_counter() - time_start))
-                    self._planning = False
-                    self._finished = True
-                except ValueError:
-                    continue
-            else:
-                time.sleep(0.001)
+            time_start = time.perf_counter()
+            recv_end, send_end = multiprocessing.Pipe(False)
+            flag_running = multiprocessing.Event()
+            algo_process = multiprocessing.Process(target = self._algorithmLoopProcess, args=(send_end,))
+            algo_process.start()
+            algo_process.join()
+            if recv_end.poll():
+                self._pathx, self._pathy = recv_end.recv()
+                self._observable.fireCallbacks(self._pathx, self._pathy)
+                self._finished = True
+                print("Astar took: {} [s]".format(time.perf_counter() - time_start))
+            time.sleep(0.01)
+
+    def _algorithmLoop2(self):
+        while self._running:
+            try:
+                time_start = time.perf_counter()
+                self._pathx, self._pathy = self._algo.planPath(self._sx, self._sy,
+                                                               self._gx, self._gy,
+                                                               self._obx, self._oby)
+                print("Astar took: {} [s]".format(time.perf_counter() - time_start))
+                self._finished = True
+            except ValueError:
+                pass
+            time.sleep(0.1)
 
     def getStartPosition(self):
         return self._sx, self._sy
@@ -285,12 +302,17 @@ class PathPlanner:
         self._finished = False
 
     def start(self):
-        self._planning = True
+        if self._algo_thread is not None and self._algo_thread.is_alive():
+            self.stop()
         self._finished = False
+        self._running = True
+        self._algo_thread = threading.Thread(target = self._algorithmLoop)
+        self._algo_thread.start()
 
     def stop(self):
-        self._running = False
-        self._algo_thread.join()
+        if self._algo_thread is not None:
+            self._running = False
+            self._algo_thread.join()
 
 class SerialDevice:
     def __init__(self, port, baudrate = 115200, read_timeout = 0):
@@ -405,13 +427,43 @@ class Observable:
 
 class Model:
 
+    ROBOT_MAX_SPEED = 0.5  # [m/s]
+    ROBOT_ENC_IMP_PER_REV = 4480 # [imp]
+    ROBOT_LX = 0.115 # [m]
+    ROBOT_LY = 0.14  # [m]
+    ROBOT_R  = 0.06  # [m]
+    ROBOT_SIZE_RADIUS = 0.2
+
+    ROBOT_DT = 0.03125
+
+    ROBOT_WHEEL_ALPHA = np.deg2rad(45.0)
+    ROBOT_WHEEL_BETA = 1.0
+
+    CMD_SETPOINTS = "sp={}={}={}={}\n"
+    CMD_SETPOINT = "setpoint_{}={}\n"
+    CMD_SETKP = "pidkp_{}={}\n"
+    CMD_SETKI = "pidki_{}={}\n"
+    CMD_SETKD = "pidkd_{}={}\n"
+
+    IDX_MOTOR_FR = 0
+    IDX_MOTOR_FL = 1
+    IDX_MOTOR_RR = 2
+    IDX_MOTOR_RL = 3
+    MOTOR_INDEXES = [IDX_MOTOR_FR, IDX_MOTOR_FL, IDX_MOTOR_RR, IDX_MOTOR_RL]
+
+    DESC_MOTOR_FR = "FR"
+    DESC_MOTOR_FL = "FL"
+    DESC_MOTOR_RR = "RR"
+    DESC_MOTOR_RL = "RL"
+    MOTOR_DESC = [DESC_MOTOR_FR, DESC_MOTOR_FL, DESC_MOTOR_RR, DESC_MOTOR_RL]
+
+    INFO_SPEED = "Speed"
+
     ZIGBEE_MAX_BYTES_PER_ACCESS = 46
     ZIGBEE_DELAY_BETWEEN_ACCESS = 0.02
     ZIGBEE_PREFIX               = "P2P FB31 "
 
-    def __init__(self, controller):
-        self._controller = controller
-
+    def __init__(self):
         self._uart_mngr = SerialDeviceManager("/dev/ttyUSB0")
         self._uart_mngr.setBytesSendPerAccess(self.ZIGBEE_MAX_BYTES_PER_ACCESS)
         self._uart_mngr.setPerAccessDelayMs(self.ZIGBEE_DELAY_BETWEEN_ACCESS)
@@ -421,27 +473,124 @@ class Model:
         self._uart_mngr_reader_loop_thread = threading.Thread(target = self._uartMngrReaderLoop)
         self._uart_mngr_reader_loop_thread.start()
 
-        self._path_algo = AStarAlgorithm(reso = 0.1, safedist = controller.ROBOT_SIZE_RADIUS)
-        self._path_planner = PathPlanner(self._path_algo)
+        self.wheel_speeds_observable = Observable()
+        self.robot_position_observable = Observable()
         self.path_planner_observable = Observable()
 
-        self._observables_loop_thread = threading.Thread(target = self._monitorObservablesLoop)
-        self._observables_loop_thread.start()
+        self.path_planner_observable.addObserverCallback(self._moveAlongPath)
 
-    def _monitorObservablesLoop(self):
-        while self._model_running:
-            if self._path_planner.isPlanningFinished():
-                self._path_planner.clearPlanningFinished()
-                self.path_planner_observable.fireCallbacks(*self._path_planner.getPlannedPath())
-            time.sleep(0.01)
+        self._path_algo = AStarAlgorithm(reso = 0.2, safedist = self.ROBOT_SIZE_RADIUS)
+        self._path_planner = PathPlanner(self.path_planner_observable, self._path_algo)
+
+        self._orientation = np.deg2rad(90.0)
 
     def _uartMngrReaderLoop(self):
         self._uart_mngr.start()
         while self._model_running:
             line = self._uart_mngr.recv()
             if line:
-                self._controller.newUartDataHandler(line)
+                self._newUartDataHandler(line)
             time.sleep(0.001)
+
+    def _newUartDataHandler(self, line):
+        if line.startswith(self.INFO_SPEED):
+            try:
+                speed_values = list(map(int, line.rstrip().split("=")[1:]))
+                self._setNewRobotPositionGivenWheelDistances(speed_values)
+                self.wheel_speeds_observable.fireCallbacks(speed_values)
+            except ValueError:
+                print("Cannot convert speed to value: {}".format(line.replace('\n', "\\n")))
+        else:
+            print("Model got new uart line: >>{}<<".format(line.replace('\n', "\\n")))
+
+    def _convertEncoderImpulsesToMeters(self, enc_imp):
+        return (enc_imp / self.ROBOT_ENC_IMP_PER_REV) * 2 * np.pi * self.ROBOT_R
+
+    def _translateRobotVelocitiesToGlobalVelocities(self, vx, vy, omega, theta):
+        # rotate counter clockwise by theta
+        vx_trans = vx * np.cos(theta) - vy * np.sin(theta)
+        vy_trans = vx * np.sin(theta) + vy * np.cos(theta)
+
+        omega_trans = omega
+
+        return vx_trans, vy_trans, omega_trans
+
+    def _translateGlobalVelocitiesToLocalVelocities(self, vx, vy, omega, theta):
+        pass
+
+    def _setNewRobotPositionGivenRobotVelocities(self, vx, vy, omega, dt):
+        vx, vy, omega = [self._convertEncoderImpulsesToMeters(vel_imp_per_sec) for vel_imp_per_sec in [vx, vy, omega]]
+
+        current_x, current_y = self._path_planner.getStartPosition()
+        current_theta = self._orientation
+
+        vx, vy, omega = self._translateRobotVelocitiesToGlobalVelocities(vx, vy, omega, current_theta)
+
+        current_x += vx * dt
+        current_y += vy * dt
+        current_theta += omega * dt
+
+        self._orientation = current_theta
+        self._path_planner.setStartPosition(current_x, current_y)
+        self.robot_position_observable.fireCallbacks(current_x, current_y, current_theta)
+
+    def _setNewRobotPositionGivenWheelDistances(self, given_wheel_positions):
+        dt = self.ROBOT_DT
+        d1, d2, d3, d4 = given_wheel_positions
+        vx = 0.25 * (d1 + d2 + d3 + d4)
+        vy = 0.25 * (d1 - d2 - d3 + d4) * np.tan(self.ROBOT_WHEEL_ALPHA)
+        omega = (d1 - d2 + d3 - d4) * self.ROBOT_WHEEL_BETA
+        self._setNewRobotPositionGivenRobotVelocities(vx, vy, omega, dt)
+
+    def _calculateInverseKinematics(self, desired_speeds):
+        jacobian = np.array([
+                             [1,  1,  (self.ROBOT_LX + self.ROBOT_LY)],
+                             [1, -1, -(self.ROBOT_LX + self.ROBOT_LY)],
+                             [1, -1,  (self.ROBOT_LX + self.ROBOT_LY)],
+                             [1,  1, -(self.ROBOT_LX + self.ROBOT_LY)]
+                            ])
+        omegas_rad_per_sec = (1 / self.ROBOT_R) * jacobian.dot(desired_speeds)
+        omegas_enc_per_sec = ((omegas_rad_per_sec / (2 * np.pi)) * self.ROBOT_ENC_IMP_PER_REV)
+        omegas_enc_per_sec = omegas_enc_per_sec.astype(int)
+        return omegas_enc_per_sec
+
+    def _headTowardsPoint(self, px, py):
+        sx, sy = self._path_planner.getStartPosition()
+        dx = px - sx
+        dy = py - sy
+
+        vect_angle = np.arctan2(dy, dx) - self._orientation
+        self.setVelocityVector(vect_angle, amount_0_to_100 = 25)
+
+    def _moveAlongPath(self, pathx, pathy):
+        if len(pathx) > 1:
+            idx = -2
+        else:
+            idx = 0
+        next_x = pathx[idx]
+        next_y = pathy[idx]
+        self._headTowardsPoint(next_x, next_y)
+
+    def setVelocityVector(self, angle_rad, amount_0_to_100):
+        desired_speed_m_per_sec = (amount_0_to_100 / 100) * self.ROBOT_MAX_SPEED
+        vx = desired_speed_m_per_sec * np.cos(angle_rad)
+        vy = desired_speed_m_per_sec * np.sin(angle_rad)
+        omega = 0
+        velocities = self._calculateInverseKinematics([vx, vy, omega])
+
+        self.sendStringOverUart(self.CMD_SETPOINTS.format(*velocities))
+        #for velocity, desc in zip(velocities, self.MOTOR_DESC):
+        #    self.sendStringOverUart(self.CMD_SETPOINT.format(desc, velocity))
+
+    def setPidPoint(self, pid_params_and_velocity):
+        for (kp, ki, kd, velocity), desc in zip(pid_params_and_velocity, self.MOTOR_DESC):
+            self.sendStringOverUart(self.CMD_SETKP.format(desc, kp))
+            self.sendStringOverUart(self.CMD_SETKI.format(desc, ki))
+            self.sendStringOverUart(self.CMD_SETKD.format(desc, kd))
+            self.sendStringOverUart(self.CMD_SETPOINT.format(desc, velocity))
+
+    def setStartPosition(self, x, y):
+        self._path_planner.setStartPosition(x, y)
 
     def setGoalPosition(self, x, y):
         self._path_planner.setGoalPosition(x, y)
@@ -449,22 +598,22 @@ class Model:
     def startPathPlanning(self):
         self._path_planner.start()
 
+    def stopPathPlanning(self):
+        self._path_planner.stop()
+
     def sendStringOverUart(self, data):
         if self._model_running:
             self._uart_mngr.send(data)
 
     def stop(self):
         self._model_running = False
-
         self._uart_mngr_reader_loop_thread.join()
-        self._observables_loop_thread.join()
-
         self._uart_mngr.stop()
         self._path_planner.stop()
 
 class MotorsFrameGraph:
     def __init__(self, parent_frame):
-        self.DATA_SIZE = 200
+        self.DATA_SIZE = 150
         self.INTERVAL_MS = 1
         self._current_speed = [0, 0, 0 ,0]
 
@@ -626,7 +775,7 @@ class PagePidDirectControl(MotorControlPage):
         self.title_font = Tk.font.Font(family = 'Consolas', size = 18, weight = 'bold')
 
         column_labels = ["Kp", "Ki", "Kd", "Velocity"]
-        row_labels = ["FR", "FL", "RR", "RL"]
+        self.row_labels = ["FR", "FL", "RR", "RL"]
 
         self.pid_entries = []
         self.velocity_entries = []
@@ -634,8 +783,8 @@ class PagePidDirectControl(MotorControlPage):
             pid_label = Tk.Label(self, text = column_labels[col_idx], font = self.title_font)
             pid_label.grid(row = 0, column = 2 * col_idx + 1, columnspan = 2, sticky = 'nsew', padx = 3, pady = 3)
 
-        for row_idx in range(1, len(row_labels) + 1):
-            motor_label = Tk.Label(self, text = row_labels[row_idx - 1], font = self.title_font)
+        for row_idx in range(1, len(self.row_labels) + 1):
+            motor_label = Tk.Label(self, text = self.row_labels[row_idx - 1], font = self.title_font)
             motor_label.grid(row = row_idx, column = 0, sticky = 'nsew');
 
             pid_entries = []
@@ -664,9 +813,9 @@ class PagePidDirectControl(MotorControlPage):
 
         button = Tk.Button(self, text = "GO!", font = self.title_font, borderwidth = 3, relief = 'raised')
         button.bind('<Button-1>', lambda event, idx = col_idx: self._buttonClickedHandler(event, "go"))
-        button.grid(row = len(row_labels) + 2, column = int(len(column_labels) / 2) + 1, columnspan = 4, sticky = 'nsew', padx = 20, pady = 5)
+        button.grid(row = len(self.row_labels) + 2, column = int(len(column_labels) / 2) + 1, columnspan = 4, sticky = 'nsew', padx = 20, pady = 5)
 
-        for i in range(len(row_labels) + 2):
+        for i in range(len(self.row_labels) + 2):
             self.rowconfigure(index = i, weight = 1, minsize = 30)
 
         self.columnconfigure(index = 0, weight = 1, minsize = 50)
@@ -685,7 +834,13 @@ class PagePidDirectControl(MotorControlPage):
             self._buttonPressedHandler(event, metadata)
 
         elif metadata == "go":
-            self._controller.setPidPoint()
+            motor_desc = []
+            for motor_idx in range(len(self.row_labels)):
+                motor_desc.append([self.getPidKp(motor_idx),
+                                   self.getPidKi(motor_idx),
+                                   self.getPidKd(motor_idx),
+                                   self.getVelocity(motor_idx)])
+            self._controller.setPidPoint(motor_desc)
 
         else:
             print("Unsupported metadata in _buttonClickedHandler: {}".format(metadata))
@@ -852,17 +1007,12 @@ class PagePathPlannerControl(MotorControlPage):
         self.goalx = x
         self.goaly = y
 
-    def getRobotPosition(self):
-        return self.robotx, self.roboty
+    def getRobotPose(self):
+        return self.robotx, self.roboty, self.robottheta
 
-    def setRobotPosition(self, x, y):
+    def setRobotPose(self, x, y, theta):
         self.robotx = x
         self.roboty = y
-
-    def getRobotOrientation(self):
-        return self.robottheta
-
-    def setRobotOrientation(self, theta):
         self.robottheta = theta
 
     def _onShow(self):
@@ -952,20 +1102,17 @@ class View:
     def getPidKd(self, motor_idx):
         return self._direct_pid_control.getPidKd(motor_idx)
 
+    def getPidParameters(self, motor_idx):
+        return self.getPidKp(motor_idx), self.getPidKi(motor_idx), self.getPidKd(motor_idx)
+
     def getVelocity(self, motor_idx):
         return self._direct_pid_control.getVelocity(motor_idx)
 
-    def getRobotPosition(self):
-        return self._path_planning_control.getRobotPosition()
+    def getRobotPose(self):
+        return self._path_planning_control.getRobotPose()
 
-    def setRobotPosition(self, x, y):
-        self._path_planning_control.setRobotPosition(x, y)
-
-    def getRobotOrientation(self):
-        return self._path_planning_control.getRobotOrientation()
-
-    def setRobotOrientation(self, theta):
-        self._path_planning_control.setRobotOrientation(theta)
+    def setRobotPose(self, x, y, theta):
+        self._path_planning_control.setRobotPose(x, y, theta)
 
     def setRobotPath(self, pathx, pathy):
         self._path_planning_control.setPath(pathx, pathy)
@@ -982,6 +1129,10 @@ class View:
     def updateRearLeftMotorSpeed(self, value):
         self.motors_graph.setSpeed(3, value)
 
+    def updateMotorSpeeds(self, values):
+        for index, speed in enumerate(values):
+            self.motors_graph.setSpeed(index, speed)
+
     def stop(self):
         plt.close("all")
         self.root.destroy()
@@ -992,45 +1143,13 @@ class View:
 
 
 class Controller:
-
-    ROBOT_MAX_SPEED = 0.5  # [m/s]
-    ROBOT_ENC_IMP_PER_REV = 4480 # [imp]
-    ROBOT_LX = 0.115 # [m]
-    ROBOT_LY = 0.14  # [m]
-    ROBOT_R  = 0.06  # [m]
-    ROBOT_SIZE_RADIUS = 0.2
-
-    ROBOT_DT = 0.03125
-
-    ROBOT_WHEEL_ALPHA = np.deg2rad(45.0)
-    ROBOT_WHEEL_BETA = 1.0
-
-    CMD_SETPOINTS = "sp={}={}={}={}\n"
-    CMD_SETPOINT = "setpoint_{}={}\n"
-    CMD_SETKP = "pidkp_{}={}\n"
-    CMD_SETKI = "pidki_{}={}\n"
-    CMD_SETKD = "pidkd_{}={}\n"
-
-    INFO_SPEED = "Speed"
-
-    IDX_MOTOR_FR = 0
-    IDX_MOTOR_FL = 1
-    IDX_MOTOR_RR = 2
-    IDX_MOTOR_RL = 3
-    MOTOR_INDEXES = [IDX_MOTOR_FR, IDX_MOTOR_FL, IDX_MOTOR_RR, IDX_MOTOR_RL]
-
-    DESC_MOTOR_FR = "FR"
-    DESC_MOTOR_FL = "FL"
-    DESC_MOTOR_RR = "RR"
-    DESC_MOTOR_RL = "RL"
-    MOTOR_DESC = [DESC_MOTOR_FR, DESC_MOTOR_FL, DESC_MOTOR_RR, DESC_MOTOR_RL]
-
     def __init__(self):
         self.PanelView = View(self)
-        self.PanelModel = Model(self)
-        self.PanelView.setRobotOrientation(np.deg2rad(90))
+        self.PanelModel = Model()
 
         self.PanelModel.path_planner_observable.addObserverCallback(self.PanelView.setRobotPath)
+        self.PanelModel.wheel_speeds_observable.addObserverCallback(self.PanelView.updateMotorSpeeds)
+        self.PanelModel.robot_position_observable.addObserverCallback(self.PanelView.setRobotPose)
 
     def incrementPidParamEntryHandler(self, entry_idx):
         current_val = self.PanelView.getPidParameterEntry(entry_idx)
@@ -1042,91 +1161,11 @@ class Controller:
         updated_val = current_val - 1
         self.PanelView.setPidParameterEntry(entry_idx, updated_val)
 
-    def newUartDataHandler(self, line):
-        if line.startswith(self.INFO_SPEED):
-            try:
-                speed_values = list(map(int, line.rstrip().split("=")[1:]))
-                self.PanelView.updateFrontRightMotorSpeed(speed_values[self.IDX_MOTOR_FR])
-                self.PanelView.updateFrontLeftMotorSpeed(speed_values[self.IDX_MOTOR_FL])
-                self.PanelView.updateRearRightMotorSpeed(speed_values[self.IDX_MOTOR_RR])
-                self.PanelView.updateRearLeftMotorSpeed(speed_values[self.IDX_MOTOR_RL])
-                self.setNewRobotPositionGivenWheelDistances(speed_values, self.ROBOT_DT)
-            except ValueError:
-                print("Cannot convert speed to value: {}".format(line.replace('\n', "\\n")))
-        else:
-            print("Controller got new uart line: >>{}<<".format(line.replace('\n', "\\n")))
-
-    def convertEncoderImpulsesToMeters(self, enc_imp):
-        return (enc_imp / self.ROBOT_ENC_IMP_PER_REV) * 2 * np.pi * self.ROBOT_R
-
-    def translateRobotVelocitiesToGlobalVelocities(self, vx, vy, omega, theta):
-        # rotate counter clockwise by theta
-        vx_trans = vx * np.cos(theta) - vy * np.sin(theta)
-        vy_trans = vx * np.sin(theta) + vy * np.cos(theta)
-
-        omega_trans = omega
-
-        return vx_trans, vy_trans, omega_trans
-
-    def translateGlobalVelocitiesToLocalVelocities(self, vx, vy, omega, theta):
-        pass
-
-    def setNewRobotPositionGivenRobotVelocities(self, vx, vy, omega, dt):
-        vx, vy, omega = [self.convertEncoderImpulsesToMeters(vel_imp_per_sec) for vel_imp_per_sec in [vx, vy, omega]]
-
-        current_x, current_y = self.PanelView.getRobotPosition()
-        current_theta = self.PanelView.getRobotOrientation()
-
-        vx, vy, omega = self.translateRobotVelocitiesToGlobalVelocities(vx, vy, omega, current_theta)
-
-        current_x += vx * dt
-        current_y += vy * dt
-        current_theta += omega * dt
-
-        self.PanelModel.setStartPosition(current_x, current_y)
-        self.PanelView.setRobotPosition(current_x, current_y)
-        self.PanelView.setRobotOrientation(current_theta)
-
-    def setNewRobotPositionGivenWheelDistances(self, given_wheel_positions, dt):
-        d1, d2, d3, d4 = given_wheel_positions
-        vx = 0.25 * (d1 + d2 + d3 + d4)
-        vy = 0.25 * (d1 - d2 - d3 + d4) * np.tan(self.ROBOT_WHEEL_ALPHA)
-        omega = (d1 - d2 + d3 - d4) * self.ROBOT_WHEEL_BETA
-        self.setNewRobotPositionGivenRobotVelocities(vx, vy, omega, dt)
-
-    def calculateInverseKinematics(self, desired_speeds):
-        jacobian = np.array([
-                             [1,  1,  (self.ROBOT_LX + self.ROBOT_LY)],
-                             [1, -1, -(self.ROBOT_LX + self.ROBOT_LY)],
-                             [1, -1,  (self.ROBOT_LX + self.ROBOT_LY)],
-                             [1,  1, -(self.ROBOT_LX + self.ROBOT_LY)]
-                            ])
-        omegas_rad_per_sec = (1 / self.ROBOT_R) * jacobian.dot(desired_speeds)
-        omegas_enc_per_sec = ((omegas_rad_per_sec / (2 * np.pi)) * self.ROBOT_ENC_IMP_PER_REV)
-        omegas_enc_per_sec = omegas_enc_per_sec.astype(int)
-        return omegas_enc_per_sec
-
     def setVelocityVector(self, angle_rad, amount_0_to_100):
-        desired_speed_m_per_sec = (amount_0_to_100 / 100) * self.ROBOT_MAX_SPEED
-        vx = desired_speed_m_per_sec * np.cos(angle_rad)
-        vy = desired_speed_m_per_sec * np.sin(angle_rad)
-        omega = 0
-        velocities = self.calculateInverseKinematics([vx, vy, omega])
+        self.PanelModel.setVelocityVector(angle_rad, amount_0_to_100)
 
-        #self.PanelModel.sendStringOverUart(self.CMD_SETPOINTS.format(*velocities))
-        for velocity, desc in zip(velocities, self.MOTOR_DESC):
-            self.PanelModel.sendStringOverUart(self.CMD_SETPOINT.format(desc, velocity))
-
-    def setPidPoint(self):
-        for idx, desc in zip(self.MOTOR_INDEXES, self.MOTOR_DESC):
-            kp = self.PanelView.getPidKp(idx)
-            ki = self.PanelView.getPidKi(idx)
-            kd = self.PanelView.getPidKd(idx)
-            velocity = self.PanelView.getVelocity(idx)
-            self.PanelModel.sendStringOverUart(self.CMD_SETKP.format(desc, kp))
-            self.PanelModel.sendStringOverUart(self.CMD_SETKI.format(desc, ki))
-            self.PanelModel.sendStringOverUart(self.CMD_SETKD.format(desc, kd))
-            self.PanelModel.sendStringOverUart(self.CMD_SETPOINT.format(desc, velocity))
+    def setPidPoint(self, pid_params_and_velocity):
+        self.PanelModel.setPidPoint(pid_params_and_velocity)
 
     def setGoalPosition(self, gx, gy):
         self.PanelModel.setGoalPosition(gx, gy)
@@ -1135,7 +1174,7 @@ class Controller:
         self.PanelModel.startPathPlanning()
 
     def stopPathPlanning(self):
-        pass
+        self.PanelModel.stopPathPlanning()
 
     def windowExitHandler(self):
         self.PanelView.stop()
