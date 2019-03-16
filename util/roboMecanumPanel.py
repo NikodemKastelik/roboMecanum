@@ -15,6 +15,65 @@ import queue
 import time
 import math
 import multiprocessing
+import os
+import pty
+import fcntl
+
+class PointMap:
+    def __init__(self):
+        self._pointsxy = np.array([
+                                  [2.9,  0.0],
+                                  [2.9,  3.1],
+                                  [2.9,  3.1],
+                                  [2.9,  3.21],
+                                  [0.7,  3.21],
+                                  [0.7,  2.0],
+                                  [0.0,  2.0],
+                                  [0.0,  4.17],
+                                  [1.85, 4.17],
+                                  [1.85, 4.87],
+                                  [1.6,  4.87],
+                                  [1.6,  6.07],
+                                  [2.8,  6.07],
+                                  [2.8,  4.87],
+                                  [2.55, 4.87],
+                                  [2.55, 4.17],
+                                  [2.70, 4.17],
+                                  [2.70, 4.07],
+                                  [2.83, 4.07],
+                                  [2.83, 4.17],
+                                  [4.13, 4.17],
+                                  [4.13, 3.21],
+                                  [3.71, 3.21],
+                                  [3.71, 3.1],
+                                  [4.25, 3.1],
+                                  [4.25, 0.0],
+                                  [2.9,  0.0]
+                                  ])
+
+    def generateInterPoints(self, reso):
+        interxy = []
+        for idx in range(len(self._pointsxy) - 1):
+            x1, y1 = self._pointsxy[idx]
+            x2, y2 = self._pointsxy[idx + 1]
+
+            dx = x2 - x1
+            dy = y2 - y1
+            d = np.hypot(dx, dy)
+            angle = np.arctan2(dy, dx)
+            ddx = np.cos(angle) * reso
+            ddy = np.sin(angle) * reso
+            for index in range(len(np.arange(0, d, reso))):
+                px = x1 + index * ddx
+                py = y1 + index * ddy
+                interxy.append([px, py])
+
+        pointsxy = np.append(self._pointsxy, interxy, axis = 0)
+
+        px = pointsxy[:, 0].tolist()
+        py = pointsxy[:, 1].tolist()
+        return px, py
+
 
 class AStarNode:
     def __init__(self, x, y, cost, pind):
@@ -25,6 +84,7 @@ class AStarNode:
 
     def __str__(self):
         return str(self.x) + "," + str(self.y) + "," + str(self.cost) + "," + str(self.pind)
+
 
 class AStarAlgorithm:
     def __init__(self, reso, safedist):
@@ -139,10 +199,10 @@ class AStarAlgorithm:
 
     def _getMotionModel(self):
         # dx, dy, cost
-        motion = [[1, 0, 1],
-                  [0, 1, 1],
-                  [-1, 0, 1],
-                  [0, -1, 1],
+        motion = [[1, 0, 0.8],
+                  [0, 1, 0.8],
+                  [-1, 0, 0.8],
+                  [0, -1, 0.8],
                   [-1, -1, math.sqrt(2)],
                   [-1, 1, math.sqrt(2)],
                   [1, -1, math.sqrt(2)],
@@ -185,8 +245,11 @@ class AStarAlgorithm:
                 c_id = min(openset, key=lambda o: openset[o].cost + self._calculateHeuristic(ngoal, openset[o]))
             except Exception as e:
                 if str(e) == "min() arg is an empty sequence": 
-                    self._resizeVirtualBoundaries()
-                raise e
+                    print("Unreachable point")
+                    return [], []
+                else:
+                    print(str(e))
+                    return [], []
             current = openset[c_id]
 
             if current.x == ngoal.x and current.y == ngoal.y:
@@ -226,8 +289,14 @@ class AStarAlgorithm:
        return np.sqrt((px - gx) ** 2 + (py - gy) ** 2) <= self.safedist
 
 class PathPlanner:
-    def __init__(self, path_observable, algorithm):
-        self._observable = path_observable
+    def __init__(self,
+                 position_observable,
+                 path_observable,
+                 obstacles_observable,
+                 algorithm):
+        self._position_observable = position_observable
+        self._path_observable = path_observable
+        self._obstacles_observable = obstacles_observable
         self._algo = algorithm
         self._sx = 0
         self._sy = 0
@@ -237,43 +306,41 @@ class PathPlanner:
         self._pathy = []
         self._obx = []
         self._oby = []
-        self._finished = False
         self._running = False
         self._algo_thread = None
 
-    def _algorithmLoopProcess(self, pipe):
-        pathx, pathy = self._algo.planPath(self._sx, self._sy,
-                                           self._gx, self._gy,
-                                           self._obx, self._oby)
-        pipe.send((pathx, pathy))
+    def _algorithmLoopProcess(self, flag_running, pipe_to_process):
+        while flag_running.is_set():
+            if pipe_to_process.poll():
+                algo_data = pipe_to_process.recv()
+                sx, sy, gx, gy, obx, oby = algo_data
+
+                time_start = time.perf_counter()
+                pathx, pathy = self._algo.planPath(sx, sy,
+                                                   gx, gy,
+                                                   obx, oby)
+                print("Astar took: {} [s]".format(time.perf_counter() - time_start))
+
+                pipe_to_process.send((pathx, pathy))
+            time.sleep(0.001)
 
     def _algorithmLoop(self):
+        flag_running = multiprocessing.Event()
+        flag_running.set()
+        pipe_to_process, pipe_from_process = multiprocessing.Pipe()
+        algo_process = multiprocessing.Process(target = self._algorithmLoopProcess,
+                                               args=(flag_running, pipe_to_process,))
+        algo_process.start()
         while self._running:
             time_start = time.perf_counter()
-            recv_end, send_end = multiprocessing.Pipe(False)
-            flag_running = multiprocessing.Event()
-            algo_process = multiprocessing.Process(target = self._algorithmLoopProcess, args=(send_end,))
-            algo_process.start()
-            algo_process.join()
-            if recv_end.poll():
-                self._pathx, self._pathy = recv_end.recv()
-                self._observable.fireCallbacks(self._pathx, self._pathy)
-                self._finished = True
-                print("Astar took: {} [s]".format(time.perf_counter() - time_start))
+            pipe_from_process.send((self._sx, self._sy,
+                                    self._gx, self._gy,
+                                    self._obx, self._oby))
+            self._pathx, self._pathy = pipe_from_process.recv()
+            self._path_observable.fireCallbacks(self._pathx, self._pathy)
             time.sleep(0.01)
-
-    def _algorithmLoop2(self):
-        while self._running:
-            try:
-                time_start = time.perf_counter()
-                self._pathx, self._pathy = self._algo.planPath(self._sx, self._sy,
-                                                               self._gx, self._gy,
-                                                               self._obx, self._oby)
-                print("Astar took: {} [s]".format(time.perf_counter() - time_start))
-                self._finished = True
-            except ValueError:
-                pass
-            time.sleep(0.1)
+        flag_running.clear()
+        algo_process.join()
 
     def getStartPosition(self):
         return self._sx, self._sy
@@ -281,6 +348,7 @@ class PathPlanner:
     def setStartPosition(self, sx, sy):
         self._sx = sx
         self._sy = sy
+        self._position_observable.fireCallbacks(sx, sy)
 
     def getGoalPosition(self):
         return self._gx, self._gy
@@ -289,28 +357,25 @@ class PathPlanner:
         self._gx = gx
         self._gy = gy
 
+    def getObstacles(self):
+        return self._obx, self._oby
+
+    def setObstacles(self, obx, oby):
+        self._obx = obx
+        self._oby = oby
+        self._obstacles_observable.fireCallbacks(obx, oby)
+
     def getPlannedPath(self):
         return self._pathx, self._pathy
 
-    def isPlanningOngoingCheck(self):
-        return self._planning
-
-    def isPlanningFinished(self):
-        return self._finished
-
-    def clearPlanningFinished(self):
-        self._finished = False
-
     def start(self):
-        if self._algo_thread is not None and self._algo_thread.is_alive():
-            self.stop()
-        self._finished = False
-        self._running = True
-        self._algo_thread = threading.Thread(target = self._algorithmLoop)
-        self._algo_thread.start()
+        if not self._running:
+            self._running = True
+            self._algo_thread = threading.Thread(target = self._algorithmLoop)
+            self._algo_thread.start()
 
     def stop(self):
-        if self._algo_thread is not None:
+        if self._running:
             self._running = False
             self._algo_thread.join()
 
@@ -431,7 +496,7 @@ class Model:
     ROBOT_ENC_IMP_PER_REV = 4480 # [imp]
     ROBOT_LX = 0.115 # [m]
     ROBOT_LY = 0.14  # [m]
-    ROBOT_R  = 0.06  # [m]
+    ROBOT_R  = 0.03  # [m]
     ROBOT_SIZE_RADIUS = 0.2
 
     ROBOT_DT = 0.03125
@@ -464,25 +529,60 @@ class Model:
     ZIGBEE_PREFIX               = "P2P FB31 "
 
     def __init__(self):
+
+        #self._model_running = True
+        #master, slave = pty.openpty()
+        #self._dummy_serial_thread = threading.Thread(target = self._dummySerialLoop, args = (master,))
+        #self._dummy_serial_thread.start()
+        #self._uart_mngr = SerialDeviceManager(os.ttyname(slave))
+
+        self._model_running = False
         self._uart_mngr = SerialDeviceManager("/dev/ttyUSB0")
+
         self._uart_mngr.setBytesSendPerAccess(self.ZIGBEE_MAX_BYTES_PER_ACCESS)
         self._uart_mngr.setPerAccessDelayMs(self.ZIGBEE_DELAY_BETWEEN_ACCESS)
         self._uart_mngr.setPrefix(self.ZIGBEE_PREFIX)
 
-        self._model_running = True
         self._uart_mngr_reader_loop_thread = threading.Thread(target = self._uartMngrReaderLoop)
-        self._uart_mngr_reader_loop_thread.start()
 
         self.wheel_speeds_observable = Observable()
         self.robot_position_observable = Observable()
-        self.path_planner_observable = Observable()
+        self.robot_path_observable = Observable()
+        self.obstacles_observable = Observable()
 
-        self.path_planner_observable.addObserverCallback(self._moveAlongPath)
+        self.robot_path_observable.addObserverCallback(self._moveAlongPath)
 
-        self._path_algo = AStarAlgorithm(reso = 0.2, safedist = self.ROBOT_SIZE_RADIUS)
-        self._path_planner = PathPlanner(self.path_planner_observable, self._path_algo)
+        self._path_algo = AStarAlgorithm(reso = 0.05, safedist = self.ROBOT_SIZE_RADIUS * 1.25)
+        self._path_planner = PathPlanner(self.robot_position_observable,
+                                         self.robot_path_observable,
+                                         self.obstacles_observable,
+                                         self._path_algo)
 
-        self._orientation = np.deg2rad(90.0)
+    def _dummySerialLoop(self, fd):
+        fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+        fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+        last_speeds = (0, 0, 0 ,0)
+        while self._model_running:
+            try:
+                readout = os.read(fd, 1024).decode()
+                command = readout.split(" ")[-1]
+                if command.startswith("sp="):
+                    last_speeds = list(map(int, command.split("=")[1:]))
+            except Exception as e:
+                if str(e) == "[Errno 11] Resource temporarily unavailable":
+                    pass
+                else:
+                    raise e
+
+            try:
+                os.write(fd, "Speed={}={}={}={}\n".format(*last_speeds).encode())
+            except Exception as e:
+                if str(e) == "[Errno 11] Resource temporarily unavailable":
+                    pass
+                else:
+                    raise e
+
+            time.sleep(0.01)
 
     def _uartMngrReaderLoop(self):
         self._uart_mngr.start()
@@ -532,7 +632,6 @@ class Model:
 
         self._orientation = current_theta
         self._path_planner.setStartPosition(current_x, current_y)
-        self.robot_position_observable.fireCallbacks(current_x, current_y, current_theta)
 
     def _setNewRobotPositionGivenWheelDistances(self, given_wheel_positions):
         dt = self.ROBOT_DT
@@ -563,13 +662,19 @@ class Model:
         self.setVelocityVector(vect_angle, amount_0_to_100 = 25)
 
     def _moveAlongPath(self, pathx, pathy):
-        if len(pathx) > 1:
-            idx = -2
+        if len(pathx) == 0:
+            self.setVelocityVector(0, amount_0_to_100 = 0)
+            return
+        elif len(pathx) < 3:
+            px1, py1 = self._path_planner.getStartPosition()
+            px2, py2 = pathx[-1], pathy[-1]
         else:
-            idx = 0
-        next_x = pathx[idx]
-        next_y = pathy[idx]
-        self._headTowardsPoint(next_x, next_y)
+            px1, py1 = pathx[-2], pathy[-2]
+            px2, py2 = pathx[-3], pathy[-3]
+        dx = px2 - px1
+        dy = py2 - py1
+        vect_angle = np.arctan2(dy, dx) - self._orientation
+        self.setVelocityVector(vect_angle, amount_0_to_100 = 25)
 
     def setVelocityVector(self, angle_rad, amount_0_to_100):
         desired_speed_m_per_sec = (amount_0_to_100 / 100) * self.ROBOT_MAX_SPEED
@@ -577,10 +682,7 @@ class Model:
         vy = desired_speed_m_per_sec * np.sin(angle_rad)
         omega = 0
         velocities = self._calculateInverseKinematics([vx, vy, omega])
-
         self.sendStringOverUart(self.CMD_SETPOINTS.format(*velocities))
-        #for velocity, desc in zip(velocities, self.MOTOR_DESC):
-        #    self.sendStringOverUart(self.CMD_SETPOINT.format(desc, velocity))
 
     def setPidPoint(self, pid_params_and_velocity):
         for (kp, ki, kd, velocity), desc in zip(pid_params_and_velocity, self.MOTOR_DESC):
@@ -604,6 +706,16 @@ class Model:
     def sendStringOverUart(self, data):
         if self._model_running:
             self._uart_mngr.send(data)
+
+    def setInitialState(self):
+        obx, oby = PointMap().generateInterPoints(reso = self.ROBOT_SIZE_RADIUS)
+        self._path_planner.setObstacles(obx, oby)
+        self._orientation = np.deg2rad(90.0)
+        self._path_planner.setStartPosition(3.4, 1.0)
+
+    def start(self):
+        self._model_running = True
+        self._uart_mngr_reader_loop_thread.start()
 
     def stop(self):
         self._model_running = False
@@ -938,10 +1050,10 @@ class PagePathPlannerControl(MotorControlPage):
         self.ax.set_ylim(-5.0, 5.0)
         self.ax.set_aspect('equal', adjustable = 'box')
         self.plot_path, = self.ax.plot([], [], ".r", markersize = 3)
-        self.plot_bounds, = self.ax.plot([], [], ".g", markersize = 20)
+        self.plot_bounds, = self.ax.plot([], [], ".g", markersize = 3)
         self.plot_goal, = self.ax.plot([], [], "*r", markersize = 10)
         self.plot_robot, = self.ax.plot([], [], "sb", markersize = 6)
-        self.plot_sensor_circle = plt.Circle((self.robotx, self.roboty), 100, fill = False)
+        self.plot_sensor_circle = plt.Circle((self.robotx, self.roboty), 0, fill = False)
         self.ax.add_artist(self.plot_sensor_circle)
         self.plot_obst_circles = []
 
@@ -980,12 +1092,23 @@ class PagePathPlannerControl(MotorControlPage):
 
         self.plot_sensor_circle.center = (self.robotx, self.roboty)
 
+        self.centerPlotOnRobot()
+
         return [self.plot_path,
                 self.plot_bounds,
                 self.plot_goal,
                 self.plot_robot,
                 self.plot_sensor_circle,
                 *self.plot_obst_circles]
+
+    def centerPlotOnRobot(self):
+        xmin, xmax, = self.ax.get_xlim()
+        dx = (xmax - xmin) / 2
+        self.ax.set_xlim(self.robotx - dx, self.robotx + dx)
+
+        ymin, ymax, = self.ax.get_ylim()
+        dy = (ymax - ymin) / 2
+        self.ax.set_ylim(self.roboty - dy, self.roboty + dy)
 
     def changeLimitsBy(self, value):
         xmin, xmax, = self.ax.get_xlim()
@@ -1014,6 +1137,23 @@ class PagePathPlannerControl(MotorControlPage):
         self.robotx = x
         self.roboty = y
         self.robottheta = theta
+
+    def getRobotPosition(self):
+        return self.robotx, self.roboty
+
+    def setRobotPosition(self, x, y):
+        self.robotx = x
+        self.roboty = y
+
+    def getRobotOrientation(self):
+        return self.robottheta
+
+    def setRobotOrientation(self, theta):
+        self.robottheta = theta
+
+    def setObstacles(self, obx, oby):
+        self.obstaclesx = obx
+        self.obstaclesy = oby
 
     def _onShow(self):
         pass
@@ -1114,8 +1254,23 @@ class View:
     def setRobotPose(self, x, y, theta):
         self._path_planning_control.setRobotPose(x, y, theta)
 
+    def getRobotPosition(self):
+        return self._path_planning_control.getRobotPosition()
+
+    def setRobotPosition(self, x, y):
+        self._path_planning_control.setRobotPosition(x, y)
+
+    def getRobotOrientation(self):
+        return self._path_planning_control.getRobotOrientation()
+
+    def setRobotorientation(self, theta):
+        self._path_planning_control.setRobotOrientation(theta)
+
     def setRobotPath(self, pathx, pathy):
         self._path_planning_control.setPath(pathx, pathy)
+
+    def setRobotObstacles(self, obx, oby):
+        self._path_planning_control.setObstacles(obx, oby)
 
     def updateFrontRightMotorSpeed(self, value):
         self.motors_graph.setSpeed(0, value)
@@ -1147,9 +1302,13 @@ class Controller:
         self.PanelView = View(self)
         self.PanelModel = Model()
 
-        self.PanelModel.path_planner_observable.addObserverCallback(self.PanelView.setRobotPath)
+        self.PanelModel.robot_path_observable.addObserverCallback(self.PanelView.setRobotPath)
+        self.PanelModel.robot_position_observable.addObserverCallback(self.PanelView.setRobotPosition)
         self.PanelModel.wheel_speeds_observable.addObserverCallback(self.PanelView.updateMotorSpeeds)
-        self.PanelModel.robot_position_observable.addObserverCallback(self.PanelView.setRobotPose)
+        self.PanelModel.obstacles_observable.addObserverCallback(self.PanelView.setRobotObstacles)
+
+        self.PanelModel.setInitialState()
+        self.PanelModel.start()
 
     def incrementPidParamEntryHandler(self, entry_idx):
         current_val = self.PanelView.getPidParameterEntry(entry_idx)
