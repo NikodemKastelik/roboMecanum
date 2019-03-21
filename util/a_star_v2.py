@@ -9,6 +9,7 @@ from matplotlib import style
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from tkinter import *
 
+import cubic_planner
 import a_star
 a_star.show_animation = False
 
@@ -148,6 +149,7 @@ class Main():
 
     def path_planning_loop(self):
         astar_grid_reso = 10
+        ds = 5
         objxy = set()
 
         while self.is_running.is_set():
@@ -164,10 +166,10 @@ class Main():
 
             time_start = time.perf_counter()
             try:
-                self.rx, self.ry = a_star.a_star_planning(float(self.robot.px), float(self.robot.py),
-                                                          self.goalx, self.goaly,
-                                                          self.obx, self.oby,
-                                                          astar_grid_reso, self.robot.radius)
+                pathx, pathy = a_star.a_star_planning(float(self.robot.px), float(self.robot.py),
+                                                      self.goalx, self.goaly,
+                                                      self.obx, self.oby,
+                                                      astar_grid_reso, self.robot.radius)
             except Exception as e:
                 errmsg = str(e)
                 if errmsg == "min() arg is an empty sequence":
@@ -182,8 +184,18 @@ class Main():
                     raise e
             print("A star took: {} [s]", time.perf_counter() - time_start)
 
-            if len(self.rx) > 1:
-                idx = -2
+            sp = cubic_planner.Spline2D(pathx[::3], pathy[::3])
+            s = np.arange(0, sp.s[-1], ds)
+            rx, ry = [], []
+            for i_s in s:
+                ix, iy = sp.calc_position(i_s)
+                rx.append(ix)
+                ry.append(iy)
+            self.rx = rx
+            self.ry = ry
+
+            if len(self.rx) > 3:
+                idx = -4
             else:
                 idx = 0
             next_x = self.rx[idx]
