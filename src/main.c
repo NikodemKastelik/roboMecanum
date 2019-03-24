@@ -3,7 +3,6 @@
 #include <hal_rcc.h>
 #include <hal_usart.h>
 #include <hal_tim.h>
-
 #include <drv_usart.h>
 
 #include <mini_printf.h>
@@ -11,6 +10,7 @@
 #include <strx_mngr.h>
 #include <logger.h>
 #include <pid.h>
+#include <stepper.h>
 
 #include <pinout.h>
 
@@ -174,8 +174,6 @@ void robot_set_pwm(robot_motor_t * p_robot_motor)
     hal_tim_ch_t pwm_ch_ccw = p_robot_motor->config->pwm_ch_ccw;
     int32_t pwm_signal = p_robot_motor->new_pwm;
 
-//    log_msg("Setting motor %s PWM value: %d\n", p_robot_motor->config->desc, pwm_signal);
-
     /* Make sure that only one MOSFET out of two will be enabled at time */
     hal_tim_cc_set(pwm_timer, pwm_ch_cw, 0);
     hal_tim_cc_set(pwm_timer, pwm_ch_ccw, 0);
@@ -240,7 +238,6 @@ void wallclock_handler(void)
     hal_tim_evt_clear(WALLCLOCK_TIMER, HAL_TIM_EVT_UPDATE);
 }
 
-
 void vcp_usart_handler(drv_usart_evt_t evt, uint8_t const * buf)
 {
     switch(evt)
@@ -276,6 +273,7 @@ int main(void)
     hal_rcc_enable(ENC_RR_TIMER_RCC);
     hal_rcc_enable(ENC_RL_TIMER_RCC);
     hal_rcc_enable(WALLCLOCK_TIMER_RCC);
+    hal_rcc_enable(STEPPER_TIMER_RCC);
 
     log_init(log_out_handler);
 
@@ -299,6 +297,7 @@ int main(void)
 
     dwt_init();
 
+    hal_gpio_mode_cfg(LED_PIN_PORT, LED_PIN_BLUE,   HAL_GPIO_MODE_OUTPUT);
     hal_gpio_mode_cfg(LED_PIN_PORT, LED_PIN_ORANGE, HAL_GPIO_MODE_OUTPUT);
     hal_gpio_mode_cfg(LED_PIN_PORT, LED_PIN_GREEN,  HAL_GPIO_MODE_OUTPUT);
 
@@ -347,14 +346,12 @@ int main(void)
     drv_usart_init(&vcp_usart, &cfg, vcp_usart_handler);
     drv_usart_rx(&vcp_usart, &recv_byte, 1);
 
+    stepper_init();
     robot_zigbee_init();
-
-    __enable_irq();
 
     char string_to_process[STR_TO_PROCESS_SIZE];
     while (1)
     {
-
         if (pid_proced)
         {
             pid_proced = false;
@@ -456,6 +453,16 @@ int main(void)
 
                     log_msg("New Kd %s: %d\n", robot_motors[motor_idx].config->desc, new_kd);
                 }
+            }
+            else if (mini_strstartswith(string_to_process, "stepper="))
+            {
+                const uint32_t idx = ARRAY_SIZE("stepper=") - 1;
+
+                int32_t target_steps = mini_atoi(&string_to_process[idx]);
+
+                stepper_goto_steps(target_steps);
+
+                log_msg("Target steps: %d\n", target_steps);
             }
         }
     }

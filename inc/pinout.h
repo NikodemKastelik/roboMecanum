@@ -9,9 +9,9 @@
 
 #define HAL_RCC_GPIOE  HAL_RCC_GPIO
 
-#define ZIGBEE_PIN_PORT  GPIOD
-#define ZIGBEE_PIN_RESET 1
-#define ZIGBEE_PIN_KEY   2
+#define ZIGBEE_PIN_PORT   GPIOD
+#define ZIGBEE_PIN_RESET  0
+#define ZIGBEE_PIN_KEY    7
 
 #define LED_PIN_PORT    GPIOD
 #define LED_PIN_GREEN   12
@@ -119,5 +119,31 @@
 #define ENC_RL_PIN_CHB       1
 
 #define ENC_TICKS_PER_REV       4480
+
+/**
+ * @brief Symbols for the stepper motor control.
+ */
+#define STEPPER_PIN_PORT  GPIOD
+#define STEPPER_PIN_IN1   1
+#define STEPPER_PIN_IN2   2
+#define STEPPER_PIN_IN3   3
+#define STEPPER_PIN_IN4   4
+
+#define STEPPER_PIN_IN1_Msk  (1 << STEPPER_PIN_IN1)
+#define STEPPER_PIN_IN2_Msk  (1 << STEPPER_PIN_IN2)
+#define STEPPER_PIN_IN3_Msk  (1 << STEPPER_PIN_IN3)
+#define STEPPER_PIN_IN4_Msk  (1 << STEPPER_PIN_IN4)
+#define STEPPER_PINS_Msk     (STEPPER_PIN_IN1_Msk | \
+                              STEPPER_PIN_IN2_Msk | \
+                              STEPPER_PIN_IN3_Msk | \
+                              STEPPER_PIN_IN4_Msk)
+
+#define STEPPER_TIMER_IDX    6
+#define STEPPER_TIMER        _GLUE(TIM, STEPPER_TIMER_IDX)
+#define STEPPER_TIMER_RCC    _GLUE(HAL_RCC_TIM, STEPPER_TIMER_IDX)
+#define STEPPER_TIMER_IRQn   TIM6_DAC_IRQn
+#define STEPPER_TIMER_FREQ   HAL_TIM_FREQ_1MHz
+#define STEPPER_TIMER_TICKS  900
+#define stepper_handler      TIM6_DAC_Handler
 
 #endif // _PINOUT_H_
