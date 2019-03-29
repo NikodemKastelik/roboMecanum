@@ -118,7 +118,7 @@
 #define ENC_RL_PIN_CHA       0
 #define ENC_RL_PIN_CHB       1
 
-#define ENC_TICKS_PER_REV       4480
+#define ENC_TICKS_PER_REV    4480
 
 /**
  * @brief Symbols for the stepper motor control.
@@ -145,5 +145,29 @@
 #define STEPPER_TIMER_FREQ   HAL_TIM_FREQ_1MHz
 #define STEPPER_TIMER_TICKS  900
 #define stepper_handler      TIM6_DAC_Handler
+
+#define STEPPER_STEPS_PER_REV  4096
+
+/**
+ * @brief Symbols for the distance sensor control.
+ */
+#define ULTRASONIC_RANGE_CM      400
+#define ULTRASONIC_US_PER_CM     58
+#define ULTRASONIC_TIMEOUT_US    (ULTRASONIC_RANGE_CM * ULTRASONIC_US_PER_CM)
+
+#define ULTRASONIC_PIN_PORT      GPIOE
+#define ULTRASONIC_PIN_TRIG      6
+#define ULTRASONIC_PIN_ECHO      5
+#define ULTRASONIC_PIN_ECHO_AF   HAL_GPIO_AF_3
+
+#define ULTRASONIC_TIMER_IDX     9
+#define ULTRASONIC_TIMER         _GLUE(TIM, ULTRASONIC_TIMER_IDX)
+#define ULTRASONIC_TIMER_RCC     _GLUE(HAL_RCC_TIM, ULTRASONIC_TIMER_IDX)
+
+#define ULTRASONIC_TIMER_IRQn    TIM1_BRK_TIM9_IRQn
+#define ULTRASONIC_TIMER_FREQ    HAL_TIM_FREQ_1MHz
+#define ULTRASONIC_TIMER_TICKS   ULTRASONIC_TIMEOUT_US
+
+#define ultrasonic_handler       TIM1_BRK_TIM9_Handler
 
 #endif // _PINOUT_H_

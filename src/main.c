@@ -3,6 +3,7 @@
 #include <hal_rcc.h>
 #include <hal_usart.h>
 #include <hal_tim.h>
+#include <hal_dwt.h>
 #include <drv_usart.h>
 
 #include <mini_printf.h>
@@ -10,7 +11,9 @@
 #include <strx_mngr.h>
 #include <logger.h>
 #include <pid.h>
+
 #include <stepper.h>
+#include <ultrasonic.h>
 
 #include <pinout.h>
 
@@ -131,18 +134,6 @@ uint8_t recv_byte;
 
 volatile bool pid_proced;
 
-void dwt_init()
-{
-    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
-    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
-}
-
-void dwt_delay_us(uint32_t us)
-{
-    uint32_t target_tick = DWT->CYCCNT + us * (16000000 / 1000000);
-    while (DWT->CYCCNT <= target_tick);
-}
-
 uint8_t robot_idx_from_desc_get(char * desc)
 {
     for (uint8_t idx = 0; idx < MOTOR_COUNT; idx++)
@@ -162,7 +153,7 @@ void robot_zigbee_init()
 
     hal_gpio_out_clr(ZIGBEE_PIN_PORT, ZIGBEE_PIN_RESET);
     hal_gpio_out_clr(ZIGBEE_PIN_PORT, ZIGBEE_PIN_KEY);
-    dwt_delay_us(200000);
+    hal_dwt_delay_us(200000);
     hal_gpio_out_set(ZIGBEE_PIN_PORT, ZIGBEE_PIN_RESET);
     hal_gpio_out_set(ZIGBEE_PIN_PORT, ZIGBEE_PIN_KEY);
 }
@@ -177,7 +168,7 @@ void robot_set_pwm(robot_motor_t * p_robot_motor)
     /* Make sure that only one MOSFET out of two will be enabled at time */
     hal_tim_cc_set(pwm_timer, pwm_ch_cw, 0);
     hal_tim_cc_set(pwm_timer, pwm_ch_ccw, 0);
-    dwt_delay_us(500);
+    hal_dwt_delay_us(500);
 
     if (pwm_signal < 0)
     {
@@ -204,6 +195,11 @@ static void robot_pid_proc(robot_motor_t * p_robot_motor, int16_t enc_latest_rea
     int32_t steering_signal = pid_positional_proc(p_robot_pid, speed_imp_per_sec);
 
     p_robot_motor->new_pwm = steering_signal;
+}
+
+void ultrasonic_data_handler(uint16_t distance_cm)
+{
+    log_msg("Distance=%d=%u\n", stepper_position_get(), distance_cm);
 }
 
 void log_out_handler(char * buf, uint32_t len)
@@ -274,6 +270,7 @@ int main(void)
     hal_rcc_enable(ENC_RL_TIMER_RCC);
     hal_rcc_enable(WALLCLOCK_TIMER_RCC);
     hal_rcc_enable(STEPPER_TIMER_RCC);
+    hal_rcc_enable(ULTRASONIC_TIMER_RCC);
 
     log_init(log_out_handler);
 
@@ -295,7 +292,7 @@ int main(void)
 
     strx_mngr_init(&strx_mngr, strx_mngr_buffer, STRX_MNGR_BUFSIZE);
 
-    dwt_init();
+    hal_dwt_init();
 
     hal_gpio_mode_cfg(LED_PIN_PORT, LED_PIN_BLUE,   HAL_GPIO_MODE_OUTPUT);
     hal_gpio_mode_cfg(LED_PIN_PORT, LED_PIN_ORANGE, HAL_GPIO_MODE_OUTPUT);
@@ -348,6 +345,7 @@ int main(void)
 
     stepper_init();
     robot_zigbee_init();
+    ultrasonic_init(ultrasonic_data_handler);
 
     char string_to_process[STR_TO_PROCESS_SIZE];
     while (1)
@@ -367,13 +365,12 @@ int main(void)
 
         if (!drv_usart_tx_ongoing_check(&vcp_usart))
         {
-            dwt_delay_us(10000);
+            hal_dwt_delay_us(10000);
             log_process();
         }
 
         if (strx_mngr_retrieve(&strx_mngr, string_to_process))
         {
-
             if (mini_strstartswith(string_to_process, "sp="))
             {
                 char * str_ptr = string_to_process;
@@ -462,7 +459,13 @@ int main(void)
 
                 stepper_goto_steps(target_steps);
 
-                log_msg("Target steps: %d\n", target_steps);
+                log_msg("Current steps: %d. Target steps: %d\n", stepper_position_get(), target_steps);
+            }
+
+            else if (mini_strstartswith(string_to_process, "dist_measure"))
+            {
+                ultrasonic_measure();
+                log_msg("Distance measurement start at %d steps\n", stepper_position_get());
             }
         }
     }
