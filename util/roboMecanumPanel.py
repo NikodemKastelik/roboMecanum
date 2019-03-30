@@ -10,6 +10,7 @@ style.use('ggplot')
 
 import serial
 import numpy as np
+import random
 import threading
 import queue
 import time
@@ -379,6 +380,74 @@ class PathPlanner:
             self._running = False
             self._algo_thread.join()
 
+class UltrasonicRadar:
+    RADAR_STEPS_PER_REV = 4096
+    RADAR_POSITION_UPDATE_TIMEOUT = 0.2
+    RADAR_DISTANCE_MEASUREMENT_TIMEOUT = 0.1
+    CMD_SET_POSITION = "stepper={}\n"
+    CMD_SENSE_DISTANCE = "dist_measure\n"
+
+    def __init__(self, sensing_cone_angle_rad, data_handler):
+        self._data_handler = data_handler
+        self._sensing_cone_angle_steps = self.angleToSteps(sensing_cone_angle_rad)
+        self._facing_angle = 0
+        self._current_position = 0
+        self._running = False
+        self._radar_rotation_thread = threading.Thread(target = self._radarRotationLoop)
+
+    def _radarRotationLoop(self):
+        angle = self._facing_angle
+        desired_position = int(self._sensing_cone_angle_steps / 2)
+        self._data_handler(self.CMD_SET_POSITION.format(desired_position))
+        position_update_time = time.perf_counter()
+        distance_update_time = time.perf_counter()
+        while self._running:
+            new_position = None
+            if desired_position == self._current_position:
+                if desired_position > self.angleToSteps(angle):
+                    new_position = desired_position - self._sensing_cone_angle_steps
+                else:
+                    new_position = desired_position + self._sensing_cone_angle_steps
+
+            if self._facing_angle > angle:
+                angle = self._facing_angle
+                new_position = self.angleToSteps(angle) + self._sensing_cone_angle_steps / 2
+            if self._facing_angle < angle:
+                angle = self._facing_angle
+                new_position = self.angleToSteps(angle) - self._sensing_cone_angle_steps / 2
+
+            if new_position is not None:
+                desired_position = int(new_position)
+
+            if time.perf_counter() > position_update_time + self.RADAR_POSITION_UPDATE_TIMEOUT:
+                position_update_time = time.perf_counter()
+                self._data_handler(self.CMD_SET_POSITION.format(desired_position))
+
+            if time.perf_counter() > distance_update_time + self.RADAR_DISTANCE_MEASUREMENT_TIMEOUT:
+                distance_update_time = time.perf_counter()
+                self._data_handler(self.CMD_SENSE_DISTANCE)
+
+            time.sleep(0.05)
+
+    def angleToSteps(self, angle_rad):
+        return int((angle_rad / (2 * np.pi)) * self.RADAR_STEPS_PER_REV)
+
+    def setFacingAngle(self, angle_rad):
+        self._facing_angle = angle_rad
+
+    def notifyPosition(self, new_position):
+        self._current_position = new_position
+
+    def start(self):
+        if not self._running:
+            self._running = True
+            self._radar_rotation_thread.start()
+
+    def stop(self):
+        if self._running:
+            self._running = False
+            self._radar_rotation_thread.join()
+
 class SerialDevice:
     def __init__(self, port, baudrate = 115200, read_timeout = 0):
         self.dev = None
@@ -523,6 +592,7 @@ class Model:
     MOTOR_DESC = [DESC_MOTOR_FR, DESC_MOTOR_FL, DESC_MOTOR_RR, DESC_MOTOR_RL]
 
     INFO_SPEED = "Speed"
+    INFO_DIST_MEASURE = "Distance="
 
     ZIGBEE_MAX_BYTES_PER_ACCESS = 46
     ZIGBEE_DELAY_BETWEEN_ACCESS = 0.02
@@ -549,6 +619,7 @@ class Model:
         self.robot_position_observable = Observable()
         self.robot_path_observable = Observable()
         self.obstacles_observable = Observable()
+        self.radar_observable = Observable()
 
         self.robot_path_observable.addObserverCallback(self._moveAlongPath)
 
@@ -558,16 +629,25 @@ class Model:
                                          self.obstacles_observable,
                                          self._path_algo)
 
+        self._radar = UltrasonicRadar(np.deg2rad(90), self.sendStringOverUart)
+
     def _dummySerialLoop(self, fd):
         fl = fcntl.fcntl(fd, fcntl.F_GETFL)
         fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
         last_speeds = (0, 0, 0 ,0)
+        radar_position = 0
         while self._model_running:
             try:
                 readout = os.read(fd, 1024).decode()
-                command = readout.split(" ")[-1]
-                if command.startswith("sp="):
-                    last_speeds = list(map(int, command.split("=")[1:]))
+                for line in readout.splitlines():
+                    command = line.split(" ")[-1]
+                    if command.startswith("sp="):
+                        last_speeds = list(map(int, command.split("=")[1:]))
+                    elif command.startswith("stepper="):
+                        radar_position = int(command.split("=")[-1])
+                    elif command.startswith("dist_measure"):
+                        distance = random.randint(0, 100)
+                        os.write(fd, "Distance={}={}\n".format(radar_position, distance).encode())
             except Exception as e:
                 if str(e) == "[Errno 11] Resource temporarily unavailable":
                     pass
@@ -600,6 +680,15 @@ class Model:
                 self.wheel_speeds_observable.fireCallbacks(speed_values)
             except ValueError:
                 print("Cannot convert speed to value: {}".format(line.replace('\n', "\\n")))
+
+        elif line.startswith(self.INFO_DIST_MEASURE):
+            try:
+                position, distance = list(map(int, line.rstrip().split("=")[1:]))
+                self._radar.notifyPosition(position)
+                print("Distance: {} at {}".format(distance, position))
+            except ValueError:
+                print("Cannot convert distance measurement to value: {}".format(line.replace('\n', "\\n")))
+
         else:
             print("Model got new uart line: >>{}<<".format(line.replace('\n', "\\n")))
 
@@ -682,6 +771,7 @@ class Model:
         vy = desired_speed_m_per_sec * np.sin(angle_rad)
         omega = 0
         velocities = self._calculateInverseKinematics([vx, vy, omega])
+        self._radar.setFacingAngle(angle_rad)
         self.sendStringOverUart(self.CMD_SETPOINTS.format(*velocities))
 
     def setPidPoint(self, pid_params_and_velocity):
@@ -702,6 +792,7 @@ class Model:
 
     def stopPathPlanning(self):
         self._path_planner.stop()
+        self.setVelocityVector(0, 0)
 
     def sendStringOverUart(self, data):
         if self._model_running:
@@ -716,12 +807,14 @@ class Model:
     def start(self):
         self._model_running = True
         self._uart_mngr_reader_loop_thread.start()
+        self._radar.start()
 
     def stop(self):
         self._model_running = False
         self._uart_mngr_reader_loop_thread.join()
         self._uart_mngr.stop()
         self._path_planner.stop()
+        self._radar.stop()
 
 class MotorsFrameGraph:
     def __init__(self, parent_frame):
