@@ -21,59 +21,80 @@ import pty
 import fcntl
 
 class PointMap:
-    def __init__(self):
-        self._pointsxy = np.array([
-                                  [2.9,  0.0],
-                                  [2.9,  3.1],
-                                  [2.9,  3.1],
-                                  [2.9,  3.21],
-                                  [0.7,  3.21],
-                                  [0.7,  2.0],
-                                  [0.0,  2.0],
-                                  [0.0,  4.17],
-                                  [1.85, 4.17],
-                                  [1.85, 4.87],
-                                  [1.6,  4.87],
-                                  [1.6,  6.07],
-                                  [2.8,  6.07],
-                                  [2.8,  4.87],
-                                  [2.55, 4.87],
-                                  [2.55, 4.17],
-                                  [2.70, 4.17],
-                                  [2.70, 4.07],
-                                  [2.83, 4.07],
-                                  [2.83, 4.17],
-                                  [4.13, 4.17],
-                                  [4.13, 3.21],
-                                  [3.71, 3.21],
-                                  [3.71, 3.1],
-                                  [4.25, 3.1],
-                                  [4.25, 0.0],
-                                  [2.9,  0.0]
-                                  ])
+    def __init__(self, reso, obstacles_observable):
+        self._obstacles_observable = obstacles_observable
+        self._reso = reso
+        self._px = []
+        self._py = []
+        self._static_known_obstacles = np.array([
+                                                [2.9,  0.0],
+                                                [2.9,  3.1],
+                                                [2.9,  3.1],
+                                                [2.9,  3.21],
+                                                [0.7,  3.21],
+                                                [0.7,  2.0],
+                                                [0.0,  2.0],
+                                                [0.0,  4.17],
+                                                [1.85, 4.17],
+                                                [1.85, 4.87],
+                                                [1.6,  4.87],
+                                                [1.6,  6.07],
+                                                [2.8,  6.07],
+                                                [2.8,  4.87],
+                                                [2.55, 4.87],
+                                                [2.55, 4.17],
+                                                [2.70, 4.17],
+                                                [2.70, 4.07],
+                                                [2.83, 4.07],
+                                                [2.83, 4.17],
+                                                [4.13, 4.17],
+                                                [4.13, 3.21],
+                                                [3.71, 3.21],
+                                                [3.71, 3.1],
+                                                [4.25, 3.1],
+                                                [4.25, 0.0],
+                                                [2.9,  0.0]
+                                                ])
 
-    def generateInterPoints(self, reso):
+    def _generateInterPoints(self):
         interxy = []
-        for idx in range(len(self._pointsxy) - 1):
-            x1, y1 = self._pointsxy[idx]
-            x2, y2 = self._pointsxy[idx + 1]
+        for idx in range(len(self._static_known_obstacles) - 1):
+            x1, y1 = self._static_known_obstacles[idx]
+            x2, y2 = self._static_known_obstacles[idx + 1]
 
             dx = x2 - x1
             dy = y2 - y1
             d = np.hypot(dx, dy)
             angle = np.arctan2(dy, dx)
-            ddx = np.cos(angle) * reso
-            ddy = np.sin(angle) * reso
-            for index in range(len(np.arange(0, d, reso))):
+            ddx = np.cos(angle) * self._reso
+            ddy = np.sin(angle) * self._reso
+            for index in range(len(np.arange(0, d, self._reso))):
                 px = x1 + index * ddx
                 py = y1 + index * ddy
                 interxy.append([px, py])
 
-        pointsxy = np.append(self._pointsxy, interxy, axis = 0)
+        pointsxy = np.append(self._static_known_obstacles, interxy, axis = 0)
 
         px = pointsxy[:, 0].tolist()
         py = pointsxy[:, 1].tolist()
         return px, py
+
+    def initializeKnownObstacles(self):
+        self._px, self._py = self._generateInterPoints()
+        self._obstacles_observable.fireCallbacks(self._px, self._py)
+
+    def getPoints(self):
+        return self._px, self._py
+
+    def addPoint(self, newpx, newpy):
+        for px, py in zip(self._px, self._py):
+            dx = newpx - px
+            dy = newpy - py
+            if np.hypot(dx, dy) < self._reso:
+                return
+        self._px.append(newpx)
+        self._py.append(newpy)
+        self._obstacles_observable.fireCallbacks(self._px, self._py)
 
 
 class AStarNode:
@@ -293,11 +314,9 @@ class PathPlanner:
     def __init__(self,
                  position_observable,
                  path_observable,
-                 obstacles_observable,
                  algorithm):
         self._position_observable = position_observable
         self._path_observable = path_observable
-        self._obstacles_observable = obstacles_observable
         self._algo = algorithm
         self._sx = 0
         self._sy = 0
@@ -364,7 +383,6 @@ class PathPlanner:
     def setObstacles(self, obx, oby):
         self._obx = obx
         self._oby = oby
-        self._obstacles_observable.fireCallbacks(obx, oby)
 
     def getPlannedPath(self):
         return self._pathx, self._pathy
@@ -379,6 +397,7 @@ class PathPlanner:
         if self._running:
             self._running = False
             self._algo_thread.join()
+
 
 class UltrasonicRadar:
     RADAR_STEPS_PER_REV = 4096
@@ -432,10 +451,13 @@ class UltrasonicRadar:
     def angleToSteps(self, angle_rad):
         return int((angle_rad / (2 * np.pi)) * self.RADAR_STEPS_PER_REV)
 
+    def stepsToAngle(self, steps):
+        return (steps / self.RADAR_STEPS_PER_REV) * (2 * np.pi)
+
     def setFacingAngle(self, angle_rad):
         self._facing_angle = angle_rad
 
-    def notifyPosition(self, new_position):
+    def notifyPosition(self, new_position, *args):
         self._current_position = new_position
 
     def start(self):
@@ -447,6 +469,7 @@ class UltrasonicRadar:
         if self._running:
             self._running = False
             self._radar_rotation_thread.join()
+
 
 class SerialDevice:
     def __init__(self, port, baudrate = 115200, read_timeout = 0):
@@ -473,6 +496,7 @@ class SerialDevice:
 
     def readLine(self):
         return self.dev.readline()
+
 
 class SerialDeviceManager(SerialDevice):
     def __init__(self, port, baudrate = 115200, read_timeout = 0.001):
@@ -548,6 +572,7 @@ class SerialDeviceManager(SerialDevice):
             pass
         self.close()
 
+
 class Observable:
     def __init__(self):
         self._observers_callbacks = []
@@ -559,8 +584,8 @@ class Observable:
         for callback in self._observers_callbacks:
             callback(*args)
 
-class Model:
 
+class Model:
     ROBOT_MAX_SPEED = 0.5  # [m/s]
     ROBOT_ENC_IMP_PER_REV = 4480 # [imp]
     ROBOT_LX = 0.115 # [m]
@@ -599,6 +624,11 @@ class Model:
     ZIGBEE_PREFIX               = "P2P FB31 "
 
     def __init__(self):
+        self.wheel_speeds_observable = Observable()
+        self.robot_position_observable = Observable()
+        self.robot_path_observable = Observable()
+        self.obstacles_observable = Observable()
+        self.radar_observable = Observable()
 
         #self._model_running = True
         #master, slave = pty.openpty()
@@ -609,27 +639,25 @@ class Model:
         self._model_running = False
         self._uart_mngr = SerialDeviceManager("/dev/ttyUSB0")
 
+        self._obstacle_map = PointMap(self.ROBOT_SIZE_RADIUS, self.obstacles_observable)
+
+        self._radar = UltrasonicRadar(np.deg2rad(90), self.sendStringOverUart)
+
         self._uart_mngr.setBytesSendPerAccess(self.ZIGBEE_MAX_BYTES_PER_ACCESS)
         self._uart_mngr.setPerAccessDelayMs(self.ZIGBEE_DELAY_BETWEEN_ACCESS)
         self._uart_mngr.setPrefix(self.ZIGBEE_PREFIX)
 
         self._uart_mngr_reader_loop_thread = threading.Thread(target = self._uartMngrReaderLoop)
 
-        self.wheel_speeds_observable = Observable()
-        self.robot_position_observable = Observable()
-        self.robot_path_observable = Observable()
-        self.obstacles_observable = Observable()
-        self.radar_observable = Observable()
-
-        self.robot_path_observable.addObserverCallback(self._moveAlongPath)
-
         self._path_algo = AStarAlgorithm(reso = 0.05, safedist = self.ROBOT_SIZE_RADIUS * 1.25)
         self._path_planner = PathPlanner(self.robot_position_observable,
                                          self.robot_path_observable,
-                                         self.obstacles_observable,
                                          self._path_algo)
 
-        self._radar = UltrasonicRadar(np.deg2rad(90), self.sendStringOverUart)
+        self.obstacles_observable.addObserverCallback(self._path_planner.setObstacles)
+        self.robot_path_observable.addObserverCallback(self._moveAlongPath)
+        self.radar_observable.addObserverCallback(self._radar.notifyPosition)
+        self.radar_observable.addObserverCallback(self._calculateObstacleAbsolutePosition)
 
     def _dummySerialLoop(self, fd):
         fl = fcntl.fcntl(fd, fcntl.F_GETFL)
@@ -646,7 +674,7 @@ class Model:
                     elif command.startswith("stepper="):
                         radar_position = int(command.split("=")[-1])
                     elif command.startswith("dist_measure"):
-                        distance = random.randint(0, 100)
+                        distance = random.randint(100, 200)
                         os.write(fd, "Distance={}={}\n".format(radar_position, distance).encode())
             except Exception as e:
                 if str(e) == "[Errno 11] Resource temporarily unavailable":
@@ -683,14 +711,22 @@ class Model:
 
         elif line.startswith(self.INFO_DIST_MEASURE):
             try:
-                position, distance = list(map(int, line.rstrip().split("=")[1:]))
-                self._radar.notifyPosition(position)
-                print("Distance: {} at {}".format(distance, position))
+                position, distance_cm = list(map(int, line.rstrip().split("=")[1:]))
+                self.radar_observable.fireCallbacks(position, distance_cm)
+                print("Distance: {} at {}".format(distance_cm, position))
             except ValueError:
                 print("Cannot convert distance measurement to value: {}".format(line.replace('\n', "\\n")))
 
         else:
             print("Model got new uart line: >>{}<<".format(line.replace('\n', "\\n")))
+
+    def _calculateObstacleAbsolutePosition(self, sensor_angle_steps, distance_cm):
+        sx, sy = self._path_planner.getStartPosition()
+        theta = self._radar.stepsToAngle(sensor_angle_steps) + self._orientation
+        distance_m = distance_cm / 100
+        dx = distance_m * np.cos(theta)
+        dy = distance_m * np.sin(theta)
+        self._obstacle_map.addPoint(float(sx + dx), float(sy + dy))
 
     def _convertEncoderImpulsesToMeters(self, enc_imp):
         return (enc_imp / self.ROBOT_ENC_IMP_PER_REV) * 2 * np.pi * self.ROBOT_R
@@ -799,10 +835,9 @@ class Model:
             self._uart_mngr.send(data)
 
     def setInitialState(self):
-        obx, oby = PointMap().generateInterPoints(reso = self.ROBOT_SIZE_RADIUS)
-        self._path_planner.setObstacles(obx, oby)
         self._orientation = np.deg2rad(90.0)
         self._path_planner.setStartPosition(3.4, 1.0)
+        self._obstacle_map.initializeKnownObstacles()
 
     def start(self):
         self._model_running = True
