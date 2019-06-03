@@ -458,14 +458,11 @@ int main(void)
                 int32_t target_steps = mini_atoi(&string_to_process[idx]);
 
                 stepper_goto_steps(target_steps);
-
-                log_msg("Current steps: %d. Target steps: %d\n", stepper_position_get(), target_steps);
             }
 
             else if (mini_strstartswith(string_to_process, "dist_measure"))
             {
                 ultrasonic_measure();
-                log_msg("Distance measurement start at %d steps\n", stepper_position_get());
             }
         }
     }
