@@ -27,7 +27,7 @@ typedef struct
     uint8_t        af_num;
 } robot_pin_desc_t;
 
-const robot_pin_desc_t robot_pins_desc[] =
+static const robot_pin_desc_t robot_pins_desc[] =
 {
     /* Front-right wheel PWM pins description */
     {PWM_FRONT_PIN_PORT, PWM_FR_PIN_CH_CW,  PWM_FRONT_PIN_AF},
@@ -88,7 +88,7 @@ typedef struct
     const robot_motor_cfg_t * config;
 } robot_motor_t;
 
-const robot_motor_cfg_t robot_motor_cfgs[MOTOR_COUNT] =
+static const robot_motor_cfg_t robot_motor_cfgs[MOTOR_COUNT] =
 {
     {
         .desc       = MOTOR_FR_DESC,
@@ -124,15 +124,15 @@ const robot_motor_cfg_t robot_motor_cfgs[MOTOR_COUNT] =
     },
 };
 
-robot_motor_t robot_motors[MOTOR_COUNT];
+static robot_motor_t robot_motors[MOTOR_COUNT];
 
-char strx_mngr_buffer[STRX_MNGR_BUFSIZE];
-strx_mngr_t strx_mngr;
+static char strx_mngr_buffer[STRX_MNGR_BUFSIZE];
+static strx_mngr_t strx_mngr;
 
-drv_usart_t vcp_usart  = DRV_USART_INSTANCE_GET(2);
-uint8_t recv_byte;
+static drv_usart_t vcp_usart  = DRV_USART_INSTANCE_GET(2);
+static uint8_t recv_byte[2];
 
-volatile bool pid_proced;
+static volatile bool pid_proced;
 
 uint8_t robot_idx_from_desc_get(char * desc)
 {
@@ -243,7 +243,16 @@ void vcp_usart_handler(drv_usart_evt_t evt, uint8_t const * buf)
 
             uint8_t chr = buf[0];
 
-            drv_usart_rx(&vcp_usart, &recv_byte, 1);
+            uint8_t * next_buf;
+            if ((uint32_t)buf == (uint32_t)&recv_byte[0])
+            {
+                next_buf = &recv_byte[1];
+            }
+            else
+            {
+                next_buf = &recv_byte[0];
+            }
+            drv_usart_rx(&vcp_usart, next_buf, 1);
 
             strx_mngr_feed(&strx_mngr, chr);
 
@@ -341,7 +350,8 @@ int main(void)
     NVIC_EnableIRQ(VCP_USART_IRQn);
     drv_usart_cfg_t cfg = DRV_USART_DEFAULT_CONFIG;
     drv_usart_init(&vcp_usart, &cfg, vcp_usart_handler);
-    drv_usart_rx(&vcp_usart, &recv_byte, 1);
+    drv_usart_rx(&vcp_usart, &recv_byte[0], 1);
+    drv_usart_rx(&vcp_usart, &recv_byte[1], 1);
 
     stepper_init();
     robot_zigbee_init();
