@@ -19,48 +19,51 @@ import multiprocessing
 import os
 import pty
 import fcntl
+import csv
 
 class PointMap:
     def __init__(self, reso, obstacles_observable):
         self._obstacles_observable = obstacles_observable
         self._reso = reso
-        self._px = []
-        self._py = []
-        self._static_known_obstacles = np.array([
-                                                [2.9,  0.0],
-                                                [2.9,  3.1],
-                                                [2.9,  3.1],
-                                                [2.9,  3.21],
-                                                [0.7,  3.21],
-                                                [0.7,  2.0],
-                                                [0.0,  2.0],
-                                                [0.0,  4.17],
-                                                [1.85, 4.17],
-                                                [1.85, 4.87],
-                                                [1.6,  4.87],
-                                                [1.6,  6.07],
-                                                [2.8,  6.07],
-                                                [2.8,  4.87],
-                                                [2.55, 4.87],
-                                                [2.55, 4.17],
-                                                [2.70, 4.17],
-                                                [2.70, 4.07],
-                                                [2.83, 4.07],
-                                                [2.83, 4.17],
-                                                [4.13, 4.17],
-                                                [4.13, 3.21],
-                                                [3.71, 3.21],
-                                                [3.71, 3.1],
-                                                [4.25, 3.1],
-                                                [4.25, 0.0],
-                                                [2.9,  0.0]
-                                                ])
+        self._static_obstacles_x = []
+        self._static_obstacles_y = []
+        self._static_obstacles_corners = np.array([
+                                                  [2.9,  0.0],
+                                                  [2.9,  3.1],
+                                                  [2.9,  3.1],
+                                                  [2.9,  3.21],
+                                                  [0.7,  3.21],
+                                                  [0.7,  2.0],
+                                                  [0.0,  2.0],
+                                                  [0.0,  4.17],
+                                                  [1.85, 4.17],
+                                                  [1.85, 4.87],
+                                                  [1.6,  4.87],
+                                                  [1.6,  6.07],
+                                                  [2.8,  6.07],
+                                                  [2.8,  4.87],
+                                                  [2.55, 4.87],
+                                                  [2.55, 4.17],
+                                                  [2.70, 4.17],
+                                                  [2.70, 4.07],
+                                                  [2.83, 4.07],
+                                                  [2.83, 4.17],
+                                                  [4.13, 4.17],
+                                                  [4.13, 3.21],
+                                                  [3.71, 3.21],
+                                                  [3.71, 3.1],
+                                                  [4.25, 3.1],
+                                                  [4.25, 0.0],
+                                                  [2.9,  0.0]
+                                                  ])
+        self._dynamic_obstacles_x = []
+        self._dynamic_obstacles_y = []
 
     def _generateInterPoints(self):
         interxy = []
-        for idx in range(len(self._static_known_obstacles) - 1):
-            x1, y1 = self._static_known_obstacles[idx]
-            x2, y2 = self._static_known_obstacles[idx + 1]
+        for idx in range(len(self._static_obstacles_corners) - 1):
+            x1, y1 = self._static_obstacles_corners[idx]
+            x2, y2 = self._static_obstacles_corners[idx + 1]
 
             dx = x2 - x1
             dy = y2 - y1
@@ -73,29 +76,41 @@ class PointMap:
                 py = y1 + index * ddy
                 interxy.append([px, py])
 
-        pointsxy = np.append(self._static_known_obstacles, interxy, axis = 0)
+        pointsxy = np.append(self._static_obstacles_corners, interxy, axis = 0)
 
-        px = pointsxy[:, 0].tolist()
-        py = pointsxy[:, 1].tolist()
-        return px, py
+        self._static_obstacles_x = pointsxy[:, 0].tolist()
+        self._static_obstacles_y = pointsxy[:, 1].tolist()
 
     def initializeKnownObstacles(self):
-        self._px, self._py = self._generateInterPoints()
-        self._obstacles_observable.fireCallbacks(self._px, self._py)
+        self._generateInterPoints()
+        self._obstacles_observable.fireCallbacks(self._static_obstacles_x, self._static_obstacles_y)
 
     def getPoints(self):
-        return self._px, self._py
+        return self._static_obstacles_x + self._dynamic_obstacles_x, \
+               self._static_obstacles_y + self._dynamic_obstacles_y
+
+    def filterPoint(self, sx, sy, newpx, newpy):
+        newp_vect_mag = np.hypot(newpx - sx, newpy - sy)
+        newp_vect_angle = np.arctan2(newpy - sy, newpx - sx)
+        angle_reso = np.arctan2(self._reso, newp_vect_mag)
+        for idx, (px, py) in enumerate(zip(self._dynamic_obstacles_x, self._dynamic_obstacles_y)):
+            p_vect_mag = np.hypot(px - sx, py - sy)
+            p_vect_angle = np.arctan2(py - sy, px - sx)
+            if newp_vect_mag > p_vect_mag and abs(p_vect_angle - newp_vect_angle) < angle_reso:
+                del self._dynamic_obstacles_x[idx]
+                del self._dynamic_obstacles_y[idx]
+        self._obstacles_observable.fireCallbacks(*self.getPoints())
 
     def addPoint(self, newpx, newpy):
-        for px, py in zip(self._px, self._py):
+        for px, py in zip(self._dynamic_obstacles_x, self._dynamic_obstacles_y):
             dx = newpx - px
             dy = newpy - py
             if np.hypot(dx, dy) < self._reso:
                 return
-        self._px.append(newpx)
-        self._py.append(newpy)
-        self._obstacles_observable.fireCallbacks(self._px, self._py)
 
+        self._dynamic_obstacles_x.append(newpx)
+        self._dynamic_obstacles_y.append(newpy)
+        self._obstacles_observable.fireCallbacks(*self.getPoints())
 
 class AStarNode:
     def __init__(self, x, y, cost, pind):
@@ -308,7 +323,7 @@ class AStarAlgorithm:
         return self._calculateFinalPath(ngoal, closedset, minnx, minny, reso)
 
     def isGoalAchieved(self, px, py, gx, gy):
-       return np.sqrt((px - gx) ** 2 + (py - gy) ** 2) <= self.safedist
+       return np.sqrt((px - gx) ** 2 + (py - gy) ** 2) <= self.reso
 
 class PathPlanner:
     def __init__(self,
@@ -387,6 +402,10 @@ class PathPlanner:
     def getPlannedPath(self):
         return self._pathx, self._pathy
 
+    def isGoalAchieved(self):
+        return self._algo.isGoalAchieved(self._sx, self._sy,
+                                         self._gx, self._gy)
+
     def start(self):
         if not self._running:
             self._running = True
@@ -403,6 +422,7 @@ class UltrasonicRadar:
     RADAR_STEPS_PER_REV = 4096
     RADAR_POSITION_UPDATE_TIMEOUT = 0.2
     RADAR_DISTANCE_MEASUREMENT_TIMEOUT = 0.1
+    RADAR_DISTANCE_CM_RELIABLE = 100
     CMD_SET_POSITION = "stepper={}\n"
     CMD_SENSE_DISTANCE = "dist_measure\n"
 
@@ -448,6 +468,9 @@ class UltrasonicRadar:
 
             time.sleep(0.05)
 
+    def resetPosition(self):
+        self._data_handler(self.CMD_SET_POSITION.format(0))
+
     def angleToSteps(self, angle_rad):
         return int((angle_rad / (2 * np.pi)) * self.RADAR_STEPS_PER_REV)
 
@@ -455,7 +478,7 @@ class UltrasonicRadar:
         return (steps / self.RADAR_STEPS_PER_REV) * (2 * np.pi)
 
     def setFacingAngle(self, angle_rad):
-        self._facing_angle = angle_rad
+        self._facing_angle = angle_rad * (-1)
 
     def notifyPosition(self, new_position, *args):
         self._current_position = new_position
@@ -469,6 +492,37 @@ class UltrasonicRadar:
         if self._running:
             self._running = False
             self._radar_rotation_thread.join()
+
+
+class MotorRecorder:
+    def __init__(self, filename, dt):
+        self._filename = filename
+        self._csv_writer = None
+        self._dt = dt
+
+    def startRecording(self, labels):
+        if not self.isRecording():
+            self._fd = open(self._filename, "w+")
+            self._csv_writer = csv.writer(self._fd)
+            self._csv_writer.writerow(["Timestamp", *labels])
+            self._timestamp = 0
+
+    def stopRecording(self):
+        if self.isRecording():
+            self._csv_writer = None
+            self._fd.close()
+            self._timestamp = 0
+
+    def isRecording(self):
+        if self._csv_writer == None:
+            return False
+        else:
+            return True
+
+    def record(self, values):
+        if self.isRecording():
+            self._csv_writer.writerow([self._timestamp, *values])
+            self._timestamp += self._dt
 
 
 class SerialDevice:
@@ -592,6 +646,7 @@ class Model:
     ROBOT_LY = 0.14  # [m]
     ROBOT_R  = 0.03  # [m]
     ROBOT_SIZE_RADIUS = 0.2
+    ROBOT_SET_SPEED_MIN = 600
 
     ROBOT_DT = 0.03125
 
@@ -623,6 +678,8 @@ class Model:
     ZIGBEE_DELAY_BETWEEN_ACCESS = 0.02
     ZIGBEE_PREFIX               = "P2P FB31 "
 
+    RECORDING_FILENAME = "readout.csv"
+
     def __init__(self):
         self.wheel_speeds_observable = Observable()
         self.robot_position_observable = Observable()
@@ -641,7 +698,7 @@ class Model:
 
         self._obstacle_map = PointMap(self.ROBOT_SIZE_RADIUS, self.obstacles_observable)
 
-        self._radar = UltrasonicRadar(np.deg2rad(90), self.sendStringOverUart)
+        self._radar = UltrasonicRadar(np.deg2rad(360), self.sendStringOverUart)
 
         self._uart_mngr.setBytesSendPerAccess(self.ZIGBEE_MAX_BYTES_PER_ACCESS)
         self._uart_mngr.setPerAccessDelayMs(self.ZIGBEE_DELAY_BETWEEN_ACCESS)
@@ -649,11 +706,14 @@ class Model:
 
         self._uart_mngr_reader_loop_thread = threading.Thread(target = self._uartMngrReaderLoop)
 
-        self._path_algo = AStarAlgorithm(reso = 0.05, safedist = self.ROBOT_SIZE_RADIUS * 1.25)
+        self._path_algo = AStarAlgorithm(reso = 0.05, safedist = self.ROBOT_SIZE_RADIUS * 1.00)
         self._path_planner = PathPlanner(self.robot_position_observable,
                                          self.robot_path_observable,
                                          self._path_algo)
 
+        self._motor_recorder = MotorRecorder(self.RECORDING_FILENAME, self.ROBOT_DT)
+
+        self.wheel_speeds_observable.addObserverCallback(self._motor_recorder.record)
         self.obstacles_observable.addObserverCallback(self._path_planner.setObstacles)
         self.robot_path_observable.addObserverCallback(self._moveAlongPath)
         self.radar_observable.addObserverCallback(self._radar.notifyPosition)
@@ -722,11 +782,15 @@ class Model:
 
     def _calculateObstacleAbsolutePosition(self, sensor_angle_steps, distance_cm):
         sx, sy = self._path_planner.getStartPosition()
-        theta = self._radar.stepsToAngle(sensor_angle_steps) + self._orientation
+        theta = self._radar.stepsToAngle(sensor_angle_steps) * (-1) + self._orientation
         distance_m = distance_cm / 100
         dx = distance_m * np.cos(theta)
         dy = distance_m * np.sin(theta)
-        self._obstacle_map.addPoint(float(sx + dx), float(sy + dy))
+        newpx = float(sx + dx)
+        newpy = float(sy + dy)
+        self._obstacle_map.filterPoint(sx, sy, newpx, newpy)
+        if distance_cm < self._radar.RADAR_DISTANCE_CM_RELIABLE:
+            self._obstacle_map.addPoint(newpx, newpy)
 
     def _convertEncoderImpulsesToMeters(self, enc_imp):
         return (enc_imp / self.ROBOT_ENC_IMP_PER_REV) * 2 * np.pi * self.ROBOT_R
@@ -787,8 +851,8 @@ class Model:
         self.setVelocityVector(vect_angle, amount_0_to_100 = 25)
 
     def _moveAlongPath(self, pathx, pathy):
-        if len(pathx) == 0:
-            self.setVelocityVector(0, amount_0_to_100 = 0)
+        if len(pathx) == 0 or self._path_planner.isGoalAchieved():
+            self.sendStringOverUart(self.CMD_SETPOINTS.format(0, 0, 0, 0))
             return
         elif len(pathx) < 3:
             px1, py1 = self._path_planner.getStartPosition()
@@ -799,15 +863,16 @@ class Model:
         dx = px2 - px1
         dy = py2 - py1
         vect_angle = np.arctan2(dy, dx) - self._orientation
-        self.setVelocityVector(vect_angle, amount_0_to_100 = 25)
+        self.setVelocityVector(vect_angle, amount_0_to_100 = 20)
 
     def setVelocityVector(self, angle_rad, amount_0_to_100):
         desired_speed_m_per_sec = (amount_0_to_100 / 100) * self.ROBOT_MAX_SPEED
         vx = desired_speed_m_per_sec * np.cos(angle_rad)
         vy = desired_speed_m_per_sec * np.sin(angle_rad)
         omega = 0
-        velocities = self._calculateInverseKinematics([vx, vy, omega])
-        self._radar.setFacingAngle(angle_rad)
+        velocities = [vi if abs(vi) > self.ROBOT_SET_SPEED_MIN else 0
+                      for vi in self._calculateInverseKinematics([vx, vy, omega])]
+        #self._radar.setFacingAngle(angle_rad)
         self.sendStringOverUart(self.CMD_SETPOINTS.format(*velocities))
 
     def setPidPoint(self, pid_params_and_velocity):
@@ -839,17 +904,27 @@ class Model:
         self._path_planner.setStartPosition(3.4, 1.0)
         self._obstacle_map.initializeKnownObstacles()
 
+    def startRecording(self):
+        self._motor_recorder.startRecording(self.MOTOR_DESC)
+
+    def stopRecording(self):
+        self._motor_recorder.stopRecording()
+
     def start(self):
         self._model_running = True
         self._uart_mngr_reader_loop_thread.start()
         self._radar.start()
 
     def stop(self):
+        self.stopRecording()
+        self.sendStringOverUart(self.CMD_SETPOINTS.format(0, 0, 0, 0))
+        self._radar.stop()
+        self._radar.resetPosition()
+        time.sleep(0.1)
         self._model_running = False
         self._uart_mngr_reader_loop_thread.join()
         self._uart_mngr.stop()
         self._path_planner.stop()
-        self._radar.stop()
 
 class MotorsFrameGraph:
     def __init__(self, parent_frame):
@@ -921,6 +996,7 @@ class MotorControlPage(Tk.Frame):
     def _onShow(self):
         raise NotImplementedError
 
+
 class PageVelocityVectorControl(MotorControlPage):
     def __init__(self, root, controller):
         MotorControlPage.__init__(self)
@@ -940,13 +1016,21 @@ class PageVelocityVectorControl(MotorControlPage):
         self.oval = self._canvas.create_oval(center_x - oval_radius_px, center_y - oval_radius_px,
                                              center_x + oval_radius_px, center_y + oval_radius_px,
                                              fill = 'white')
-        self._canvas.tag_bind(self.oval, '<Button-1>', self._clickedInCircleHandler)
-        self._canvas.tag_bind(self.oval, '<ButtonRelease-1>', self._releasedCirceClickHandler)
 
         self.velocity_vector = self._canvas.create_line(center_x, center_y,
                                                         center_x, center_y,
                                                         arrow = Tk.LAST,
                                                         width = 4)
+
+        self.line_horizontal = self._canvas.create_line(center_x - oval_radius_px, center_y,
+                                                        center_x + oval_radius_px, center_y)
+
+        self.line_vertical = self._canvas.create_line(center_x, center_y - oval_radius_px,
+                                                      center_x, center_y + oval_radius_px)
+
+        for canvas_elem in [self.oval, self.velocity_vector, self.line_horizontal, self.line_vertical]:
+            self._canvas.tag_bind(canvas_elem, '<Button-1>', self._clickedInCircleHandler)
+            self._canvas.tag_bind(canvas_elem, '<ButtonRelease-1>', self._releasedCirceClickHandler)
 
     def redraw(self):
         self._root.update_idletasks()
@@ -957,6 +1041,10 @@ class PageVelocityVectorControl(MotorControlPage):
                                         center_x + oval_radius_px, center_y + oval_radius_px))
         self._canvas.coords(self.velocity_vector, (center_x, center_y,
                                                    center_x, center_y))
+        self._canvas.coords(self.line_horizontal, (center_x - oval_radius_px, center_y,
+                                                   center_x + oval_radius_px, center_y))
+        self._canvas.coords(self.line_vertical, (center_x, center_y - oval_radius_px,
+                                                 center_x, center_y + oval_radius_px))
 
     def _clickedInCircleHandler(self, event):
         if event is not None:
@@ -1010,40 +1098,32 @@ class PagePidDirectControl(MotorControlPage):
     def __init__(self, controller):
         MotorControlPage.__init__(self)
 
+        self._is_recording = False
+
         self._controller = controller
         self.small_font = Tk.font.Font(family = 'Consolas', size = 10)
         self.title_font = Tk.font.Font(family = 'Consolas', size = 18, weight = 'bold')
 
-        column_labels = ["Kp", "Ki", "Kd", "Velocity"]
+        column_labels =   ["Kp",  "Ki",  "Kd", "Velocity"]
+        default_values =  ["600", "300", "0",  "0"]
+
         self.row_labels = ["FR", "FL", "RR", "RL"]
 
         self.pid_entries = []
         self.velocity_entries = []
         for col_idx in range(len(column_labels)):
             pid_label = Tk.Label(self, text = column_labels[col_idx], font = self.title_font)
-            pid_label.grid(row = 0, column = 2 * col_idx + 1, columnspan = 2, sticky = 'nsew', padx = 3, pady = 3)
+            pid_label.grid(row = 0, column = col_idx + 1, columnspan = 1, sticky = 'nsew', padx = 3, pady = 3)
 
         for row_idx in range(1, len(self.row_labels) + 1):
             motor_label = Tk.Label(self, text = self.row_labels[row_idx - 1], font = self.title_font)
             motor_label.grid(row = row_idx, column = 0, sticky = 'nsew');
 
             pid_entries = []
-            for col_idx in range(len(column_labels)):
+            for col_idx, default_value in enumerate(default_values):
                 entry = Tk.Entry(self, justify = Tk.CENTER, font = self.title_font)
-                button_left = Tk.Button(self, text = "<", font = self.title_font, borderwidth = 3, relief = 'raised')
-                button_right = Tk.Button(self, text = ">", font = self.title_font, borderwidth = 3, relief = 'raised')
-
-                button_left.bind('<Button-1>', lambda event, idx = col_idx: self._buttonClickedHandler(event, "decrement {}".format(idx)))
-                button_right.bind('<Button-1>', lambda event, idx = col_idx: self._buttonClickedHandler(event, "increment {}".format(idx)))
-
-                button_left.bind('<ButtonRelease-1>', lambda event, idx = col_idx: self._buttonReleasedHandler(event, "decrement {}".format(idx)))
-                button_right.bind('<ButtonRelease-1>', lambda event, idx = col_idx: self._buttonReleasedHandler(event, "increment {}".format(idx)))
-
-                entry.grid(row = row_idx, column = 2 * col_idx + 1, columnspan = 2, sticky = 'nsew', padx = 20, pady = 3)
-                #button_left.grid(row = 2, column = 2 * col_idx, sticky = 'nsew', padx = 20, pady = 3)
-                #button_right.grid(row = 2, column = 2 * col_idx + 1, sticky = 'nsew', padx = 20, pady = 3)
-
-                entry.insert(0, "0")
+                entry.grid(row = row_idx, column = col_idx + 1, columnspan = 1, sticky = 'nsew', padx = 20, pady = 3)
+                entry.insert(0, default_value)
 
                 if col_idx == len(column_labels) - 1:
                     self.velocity_entries.append(entry)
@@ -1052,8 +1132,13 @@ class PagePidDirectControl(MotorControlPage):
             self.pid_entries.append(pid_entries)
 
         button = Tk.Button(self, text = "GO!", font = self.title_font, borderwidth = 3, relief = 'raised')
-        button.bind('<Button-1>', lambda event, idx = col_idx: self._buttonClickedHandler(event, "go"))
-        button.grid(row = len(self.row_labels) + 2, column = int(len(column_labels) / 2) + 1, columnspan = 4, sticky = 'nsew', padx = 20, pady = 5)
+        button.bind('<Button-1>', lambda event: self._buttonClickedHandler(event, "go"))
+        button.grid(row = len(self.row_labels) + 2, column = int(len(column_labels) / 2), columnspan = 2, sticky = 'nsew', padx = 20, pady = 5)
+
+        self._recording_button = Tk.Button(self, text = "Start Recording", font = self.title_font, borderwidth = 3, relief = 'raised')
+        self._recording_button.bind('<Button-1>', lambda event: self._buttonClickedHandler(event, "recording"))
+        self._recording_button.grid(row = len(self.row_labels) + 2, column = int(len(column_labels) / 2) + 2, columnspan = 1,
+                                    sticky = 'nsew', padx = 20, pady = 5)
 
         for i in range(len(self.row_labels) + 2):
             self.rowconfigure(index = i, weight = 1, minsize = 30)
@@ -1063,17 +1148,7 @@ class PagePidDirectControl(MotorControlPage):
             self.columnconfigure(index = i, weight = 1)
 
     def _buttonClickedHandler(self, event, metadata):
-        if metadata.startswith("increment"):
-            entry_idx = int(metadata[-1])
-            self._controller.incrementPidParamEntryHandler(entry_idx)
-            self._buttonPressedHandler(event, metadata)
-
-        elif metadata.startswith("decrement"):
-            entry_idx = int(metadata[-1])
-            self._controller.decrementPidParamEntryHandler(entry_idx)
-            self._buttonPressedHandler(event, metadata)
-
-        elif metadata == "go":
+        if metadata == "go":
             motor_desc = []
             for motor_idx in range(len(self.row_labels)):
                 motor_desc.append([self.getPidKp(motor_idx),
@@ -1081,24 +1156,17 @@ class PagePidDirectControl(MotorControlPage):
                                    self.getPidKd(motor_idx),
                                    self.getVelocity(motor_idx)])
             self._controller.setPidPoint(motor_desc)
-
+        elif metadata == "recording":
+            if self._is_recording:
+                self._recording_button['text'] = "Start Recording"
+                self._is_recording = False
+                self._controller.stopRecording()
+            else:
+                self._recording_button['text'] = "Stop Recording"
+                self._is_recording = True
+                self._controller.startRecording()
         else:
             print("Unsupported metadata in _buttonClickedHandler: {}".format(metadata))
-
-    def _buttonPressedHandler(self, event, metadata):
-        if event is not None:
-            self._button_pressed_counter = 0
-            self._is_button_pressed = True
-            self.root.after(250, self._buttonPressedHandler, None, metadata)
-        elif self._is_button_pressed:
-            delay_ms = 100
-            if self._button_pressed_counter > 10:
-                delay_ms = 25
-            self.root.after(delay_ms, self._buttonClickedHandler, None, metadata)
-            self._button_pressed_counter += 1
-
-    def _buttonReleasedHandler(self, event, metadata):
-        self._is_button_pressed = False
 
     def _onShow(self):
         pass
@@ -1325,32 +1393,31 @@ class View:
         frame_motor_graphs.columnconfigure(index = 0, weight = 1)
         frame_motor_graphs.rowconfigure(index = 0, weight = 1)
 
-        title_label = Tk.Label(frame_title, text = "RoboMecanum Control Panel", font = self.title_font)
-        pid_control_button = Tk.Button(frame_title, text = "PID Direct Control", font = self.title_font, borderwidth = 3, relief = 'raised')
-        pid_control_button.bind('<Button-1>', lambda event: self._buttonClickedHandler(event, "pid_control"))
-        velocity_vector_button = Tk.Button(frame_title, text = "Velocity Vector Control", font = self.title_font, borderwidth = 3, relief = 'raised')
-        velocity_vector_button.bind('<Button-1>', lambda event: self._buttonClickedHandler(event, "velocity_vector"))
-        path_control_button = Tk.Button(frame_title, text = "Path Planning", font = self.title_font, borderwidth = 3, relief = 'raised')
-        path_control_button.bind('<Button-1>', lambda event: self._buttonClickedHandler(event, "path_planning"))
-
+        title_label = Tk.Label(frame_title, text = "RoboMecanum\nControl Panel", font = self.title_font)
         title_label.pack(fill = Tk.X, side = Tk.LEFT, expand = True)
-        pid_control_button.pack(fill = Tk.X, side = Tk.LEFT, expand = True)
-        velocity_vector_button.pack(fill = Tk.X, side = Tk.LEFT, expand = True)
-        path_control_button.pack(fill = Tk.X, side = Tk.LEFT, expand = True)
+
+        for text, metadata in [("PID Direct Control", "pid_control"),
+                               ("Velocity Vector Control", "velocity_vector"),
+                               ("Path Planning", "path_planning")]:
+            button = Tk.Button(frame_title, text = text, font = self.title_font, borderwidth = 3, relief = 'raised')
+            button.bind('<Button-1>', lambda event, arg = metadata: self._buttonClickedHandler(event, arg))
+            button.pack(fill = Tk.X, side = Tk.LEFT, expand = True)
 
         self._direct_pid_control = PagePidDirectControl(controller)
         self._velocity_vector_control = PageVelocityVectorControl(self.root, controller)
         self._path_planning_control = PagePathPlannerControl(self.root, controller)
 
-        self._velocity_vector_control.place(in_= frame_motor_control, x = 0, y = 0, relwidth = 1, relheight = 1)
-        self._direct_pid_control.place(in_= frame_motor_control, x = 0, y = 0, relwidth = 1, relheight = 1)
-        self._path_planning_control.place(in_= frame_motor_control, x = 0, y = 0, relwidth = 1, relheight = 1)
+        for page in [self._direct_pid_control,
+                     self._velocity_vector_control,
+                     self._path_planning_control]:
+            page.place(in_= frame_motor_control, x = 0, y = 0, relwidth = 1, relheight = 1)
 
         self.motors_graph = MotorsFrameGraph(frame_graph)
 
         self._velocity_vector_control.show()
 
     def _buttonClickedHandler(self, event, metadata):
+        print(metadata)
         if metadata == "pid_control":
             self._direct_pid_control.show()
         elif metadata == "velocity_vector":
@@ -1462,6 +1529,12 @@ class Controller:
 
     def stopPathPlanning(self):
         self.PanelModel.stopPathPlanning()
+
+    def startRecording(self):
+        self.PanelModel.startRecording()
+
+    def stopRecording(self):
+        self.PanelModel.stopRecording()
 
     def windowExitHandler(self):
         self.PanelView.stop()
