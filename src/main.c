@@ -363,14 +363,10 @@ int main(void)
         if (pid_proced)
         {
             pid_proced = false;
-            for (uint8_t idx = 0; idx < MOTOR_COUNT; idx++)
-            {
-                robot_set_pwm(&robot_motors[idx]);
-            }
             log_msg("Speed=%hd=%hd=%hd=%hd\n", robot_motors[MOTOR_FR_IDX].pid.last_point,
-                                               robot_motors[MOTOR_FL_IDX].pid.last_point,
-                                               robot_motors[MOTOR_RR_IDX].pid.last_point,
-                                               robot_motors[MOTOR_RL_IDX].pid.last_point);
+                                               hal_tim_cc_get(PWM_FRONT_TIMER, PWM_FR_CH_CW),
+                                               hal_tim_cc_get(PWM_FRONT_TIMER, PWM_FR_CH_CCW),
+                                               0);
         }
 
         if (!drv_usart_tx_ongoing_check(&vcp_usart))
@@ -460,6 +456,13 @@ int main(void)
 
                     log_msg("New Kd %s: %d\n", robot_motors[motor_idx].config->desc, new_kd);
                 }
+            }
+            else if (mini_strstartswith(string_to_process, "pwm="))
+            {
+                uint32_t idx = ARRAY_SIZE("pwm=") - 1;
+                robot_motors[0].new_pwm = mini_atoi(&string_to_process[idx]);
+                robot_set_pwm(&robot_motors[0]);
+                log_msg("Manually set PWM: %d\n", robot_motors[0].new_pwm);
             }
             else if (mini_strstartswith(string_to_process, "stepper="))
             {

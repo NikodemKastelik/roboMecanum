@@ -658,6 +658,7 @@ class Model:
     CMD_SETKP = "pidkp_{}={}\n"
     CMD_SETKI = "pidki_{}={}\n"
     CMD_SETKD = "pidkd_{}={}\n"
+    CMD_SETPWM = "pwm={}\n"
 
     IDX_MOTOR_FR = 0
     IDX_MOTOR_FL = 1
@@ -876,11 +877,7 @@ class Model:
         self.sendStringOverUart(self.CMD_SETPOINTS.format(*velocities))
 
     def setPidPoint(self, pid_params_and_velocity):
-        for (kp, ki, kd, velocity), desc in zip(pid_params_and_velocity, self.MOTOR_DESC):
-            self.sendStringOverUart(self.CMD_SETKP.format(desc, kp))
-            self.sendStringOverUart(self.CMD_SETKI.format(desc, ki))
-            self.sendStringOverUart(self.CMD_SETKD.format(desc, kd))
-            self.sendStringOverUart(self.CMD_SETPOINT.format(desc, velocity))
+        self.sendStringOverUart(self.CMD_SETPWM.format(pid_params_and_velocity[0][3]))
 
     def setStartPosition(self, x, y):
         self._path_planner.setStartPosition(x, y)
